@@ -1,7 +1,7 @@
 {
   "name": "powerpoint-skills",
   "description": "Design PowerPoint slides or whole decks as native, editable shapes, with or without your master: built in a working copy, checked and rendered to PNG before you see it, and refined from your feedback.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": {
     "name": "Volker Meyer"
   },
