@@ -58,23 +58,39 @@ Set the engine up once per machine, or ask your agent: "Set up the powerpoint-sk
 
 1. **uv** runs the Python engine. macOS: `brew install uv`; macOS or Linux without Homebrew, the official
    installer: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
-2. **LibreOffice and poppler** render slides to PNG.
+2. **A renderer** turns the deck into a PDF. The engine uses **Microsoft PowerPoint** when it is installed
+   (macOS, in `/Applications` or `~/Applications`) and **LibreOffice** otherwise. With PowerPoint there is
+   nothing to install, but it needs a one-time permission, given on the first render:
 
-   macOS:
+   - **Automation:** macOS asks whether your terminal (or the app your agent runs in) may control
+     Microsoft PowerPoint. Allow it. The setting lives under System Settings → Privacy & Security → Automation.
+   - **Folder access:** PowerPoint is sandboxed and asks for access on its first export. Choose
+     **Grant Access** for the folder that holds your projects, e.g. `~/projects`. Renders are written into
+     the deck folder (`decks/<slug>/render/`), so PowerPoint can only render decks inside a granted folder.
+
+   The engine never touches the presentations you have open and never quits PowerPoint: it opens a copy
+   with a unique name, exports it to PDF and closes it again. If PowerPoint fails (for example while a
+   permission dialog is still waiting) and LibreOffice is installed, the render falls back to LibreOffice
+   and says so.
+
+   Install LibreOffice only on a machine without PowerPoint:
 
    ```bash
-   brew install --cask libreoffice          # or without admin rights:
+   brew install --cask libreoffice          # macOS; or without admin rights:
    brew install --cask --appdir=~/Applications libreoffice
-   brew install poppler
+   sudo apt install libreoffice             # Linux
    ```
 
-   Linux:
+   To pick a renderer yourself, pass `--renderer powerpoint` or `--renderer libreoffice` to `pptx render`
+   and `pptx style`, or set `PPTX_SKILLS_RENDERER` (default `auto`).
+3. **poppler** turns the PDF into PNGs, with either renderer:
 
    ```bash
-   sudo apt install libreoffice poppler-utils
+   brew install poppler                     # macOS
+   sudo apt install poppler-utils           # Linux
    ```
 
-3. **Check the setup** with the engine's `doctor` command:
+4. **Check the setup** with the engine's `doctor` command:
 
    ```bash
    uv run --project <plugin-root>/references pptx doctor
@@ -86,7 +102,8 @@ plugin cache, `~/.claude/plugins/cache/<marketplace>/powerpoint-skills/<version>
 the engine's Python packages (python-pptx, lxml, Pillow, jsonschema) into `references/.venv`; that needs the
 network once, and every later run works offline.
 
-`pptx doctor` reports what is missing (LibreOffice, poppler, fonts used by your master).
+`pptx doctor` names the renderer in use, shows PowerPoint's version and one-time setup, and reports what is
+missing (a renderer, poppler, fonts used by your master).
 
 Every command reports a problem as `error: <message>` and exits with 2 (1 means `check` found errors). For an
 unexpected error, set `PPTX_SKILLS_DEBUG=1` to also print the Python traceback.

@@ -91,10 +91,13 @@ def _style_rules(style_file: str | None) -> dict | None:
     return load_style_file(Path(style_file)).get("rules") if style_file else None
 
 
-def refresh_brief(deck_dir: Path, deck: dict, force: bool = False, notes: list[str] | None = None) -> dict:
+def refresh_brief(
+    deck_dir: Path, deck: dict, force: bool = False, notes: list[str] | None = None, renderer: str | None = None
+) -> dict:
     """Rebuild style/brief.json, brief.md and the contact sheets (skipped while the sources are unchanged).
 
-    `force` re-renders the sheets; messages for the user (e.g. skipped sheets) are appended to `notes`.
+    `force` re-renders the sheets with `renderer` (default: PPTX_SKILLS_RENDERER, else auto); messages for the
+    user (e.g. skipped sheets) are appended to `notes`.
     """
     from .render import update_sheets
 
@@ -107,7 +110,7 @@ def refresh_brief(deck_dir: Path, deck: dict, force: bool = False, notes: list[s
         previous = (load_brief(deck_dir) or {}).get("sources_hash")
     except PptxSkillsError:
         previous = None
-    brief["sources_hash"], sheet_notes = update_sheets(deck_dir, deck, previous, force)
+    brief["sources_hash"], sheet_notes = update_sheets(deck_dir, deck, previous, force, renderer)
     write_brief(brief, deck_dir / "style")
     if notes is not None:
         notes.extend(sheet_notes)
@@ -286,7 +289,7 @@ def _handle_style(args) -> int:
     deck_dir = Path(args.deck_dir)
     deck = load_deck(deck_dir)
     notes: list[str] = []
-    refresh_brief(deck_dir, deck, force=args.refresh, notes=notes)
+    refresh_brief(deck_dir, deck, force=args.refresh, notes=notes, renderer=args.renderer)
     style = deck_dir / "style"
     data = {"brief": str(style / "brief.json"), "markdown": str(style / "brief.md"), "notes": notes}
     for key, name in (("layouts", "layouts.png"), ("examples", "examples.png")):
@@ -297,6 +300,8 @@ def _handle_style(args) -> int:
 
 
 def register(subparsers) -> None:
+    from .render import add_renderer_option
+
     init = subparsers.add_parser("init", help="Create a deck folder with a working copy and a style brief.")
     init.add_argument("deck_dir", help="deck folder, e.g. decks/<slug>")
     init.add_argument("--from", dest="source", help="master or deck (.potx/.pptx) whose layouts define the style")
@@ -312,5 +317,6 @@ def register(subparsers) -> None:
     style = subparsers.add_parser("style", help="Rebuild the style brief of a deck folder.")
     style.add_argument("deck_dir", help="deck folder")
     style.add_argument("--refresh", action="store_true", help="re-render the contact sheets even if the sources are unchanged")
+    add_renderer_option(style)
     style.add_argument("--json", action="store_true", help="machine-readable output")
     style.set_defaults(handler=_handle_style)

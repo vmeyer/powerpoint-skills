@@ -1,9 +1,13 @@
-"""Render slides to PNG (LibreOffice + poppler), contact sheets of layouts and examples, and `doctor`."""
+"""Render slides to PNG (PowerPoint or LibreOffice, then poppler), contact sheets of layouts and examples, and `doctor`."""
 
 import hashlib
+import os
+import plistlib
 import shutil
 import subprocess
+import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -19,7 +23,17 @@ _SOFFICE_PATHS = (
     Path("/Applications/LibreOffice.app/Contents/MacOS/soffice"),
     Path.home() / "Applications/LibreOffice.app/Contents/MacOS/soffice",
 )
+_POWERPOINT_PATHS = (
+    Path("/Applications/Microsoft PowerPoint.app"),
+    Path.home() / "Applications/Microsoft PowerPoint.app",
+)
+_MACOS = sys.platform == "darwin"
+RENDERERS = ("auto", "powerpoint", "libreoffice")
+RENDERER_ENV = "PPTX_SKILLS_RENDERER"
+_LABELS = {"powerpoint": "PowerPoint", "libreoffice": "LibreOffice"}
 _TIMEOUT_S = 180
+_POWERPOINT_TIMEOUT_S = 120
+_CLOSE_TIMEOUT_S = 15
 # LibreOffice leaves hidden slides out of a PDF by default, so page n would no longer be slide n
 _PDF_FILTER = 'pdf:impress_pdf_Export:{"ExportHiddenSlides":{"type":"boolean","value":"true"}}'
 _GAP = 16
@@ -28,8 +42,60 @@ _INSTALL_HINT = (
     "install LibreOffice and poppler: `brew install --cask libreoffice` (add `--appdir=~/Applications` without "
     "admin rights) and `brew install poppler`, or `apt install libreoffice poppler-utils`"
 )
+_POPPLER_HINT = "install poppler: `brew install poppler` or `apt install poppler-utils`"
+_POWERPOINT_SETUP = (
+    "PowerPoint needs a one-time setup: allow the app that runs `pptx` (your terminal or agent) to control "
+    "Microsoft PowerPoint under System Settings → Privacy & Security → Automation, and when PowerPoint asks for "
+    'access on the first export, choose "Grant Access" for a folder that holds your decks and their render folders '
+    "(e.g. ~/projects), since PowerPoint writes only inside folders granted this way"
+)
+# The copy is opened, exported and closed by its unique name; the user's own presentations are never addressed,
+# PowerPoint is never quit, and the paths arrive as arguments rather than as script text.
+_EXPORT_SCRIPT = """on run argv
+	set deckFile to POSIX file (item 1 of argv)
+	set pdfFile to POSIX file (item 2 of argv)
+	set stem to item 3 of argv
+	tell application "Microsoft PowerPoint"
+		with timeout of 110 seconds
+			open deckFile
+			set deckName to missing value
+			repeat 50 times
+				repeat with candidate in (get name of every presentation)
+					if (candidate as text) starts with stem then
+						set deckName to candidate as text
+						exit repeat
+					end if
+				end repeat
+				if deckName is not missing value then exit repeat
+				delay 0.2
+			end repeat
+			if deckName is missing value then error "PowerPoint did not open the copy of the deck"
+			try
+				save presentation deckName in pdfFile as save as PDF
+			on error errMsg number errNum
+				close presentation deckName saving no
+				error errMsg number errNum
+			end try
+			close presentation deckName saving no
+		end timeout
+	end tell
+end run"""
+_CLOSE_SCRIPT = """on run argv
+	set stem to item 1 of argv
+	if application "Microsoft PowerPoint" is running then
+		tell application "Microsoft PowerPoint"
+			repeat with candidate in (get name of every presentation)
+				if (candidate as text) starts with stem then close presentation (candidate as text) saving no
+			end repeat
+		end tell
+	end if
+end run"""
 LAYOUTS_SHEET = "layouts.png"
 EXAMPLES_SHEET = "examples.png"
+
+
+class _PowerPointFailed(Exception):
+    """PowerPoint produced no PDF; the message says why."""
 
 
 def find_soffice() -> Path | None:
@@ -39,17 +105,63 @@ def find_soffice() -> Path | None:
     return next((p for p in _SOFFICE_PATHS if p.is_file()), None)
 
 
+def find_powerpoint() -> Path | None:
+    """The Microsoft PowerPoint app on macOS, None elsewhere or when it is not installed."""
+    if not _MACOS:
+        return None
+    return next((p for p in _POWERPOINT_PATHS if p.is_dir()), None)
+
+
+def powerpoint_version(app: Path) -> str | None:
+    """The version from the app's Info.plist, read without launching PowerPoint."""
+    try:
+        with open(Path(app) / "Contents/Info.plist", "rb") as handle:
+            return plistlib.load(handle).get("CFBundleShortVersionString")
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return None
+
+
 def find_pdftoppm() -> Path | None:
     found = shutil.which("pdftoppm")
     return Path(found) if found else None
 
 
-def _require_tools() -> tuple[Path, Path]:
-    soffice, pdftoppm = find_soffice(), find_pdftoppm()
-    missing = [name for name, path in (("LibreOffice (soffice)", soffice), ("poppler (pdftoppm)", pdftoppm)) if path is None]
-    if missing:
-        raise PptxSkillsError(f"{' and '.join(missing)} not found; {_INSTALL_HINT}; `pptx doctor` checks the setup")
-    return soffice, pdftoppm
+def requested_renderer(requested: str | None = None) -> str:
+    """The renderer asked for: the `--renderer` option, else PPTX_SKILLS_RENDERER, else auto."""
+    value = (requested or os.environ.get(RENDERER_ENV) or "auto").strip().lower()
+    if value not in RENDERERS:
+        raise PptxSkillsError(f"{RENDERER_ENV} must be one of {', '.join(RENDERERS)}; got {value!r}")
+    return value
+
+
+def select_renderer(requested: str) -> str | None:
+    """The installed renderer for a request: auto takes PowerPoint, else LibreOffice; None when none fits."""
+    if requested in ("auto", "powerpoint") and find_powerpoint() is not None:
+        return "powerpoint"
+    if requested in ("auto", "libreoffice") and find_soffice() is not None:
+        return "libreoffice"
+    return None
+
+
+def _require_tools(renderer: str | None = None) -> tuple[str, str, Path]:
+    """(requested renderer, renderer to use, pdftoppm), or an error that says what to install."""
+    want = requested_renderer(renderer)
+    chosen, pdftoppm = select_renderer(want), find_pdftoppm()
+    problems, hints = [], []
+    if chosen is None:
+        if want == "powerpoint":
+            problems.append(f"PowerPoint not found (asked for by --renderer or {RENDERER_ENV})")
+            hints.append("PowerPoint renders on macOS from /Applications or ~/Applications; or use `--renderer libreoffice`")
+        else:
+            problems.append("LibreOffice (soffice) not found" if want == "libreoffice" else "neither PowerPoint nor LibreOffice found")
+            hints.append(_INSTALL_HINT)
+    if pdftoppm is None:
+        problems.append("poppler (pdftoppm) not found")
+        if _INSTALL_HINT not in hints:
+            hints.append(_POPPLER_HINT)
+    if problems:
+        raise PptxSkillsError(f"{' and '.join(problems)}; {'; '.join(hints)}; `pptx doctor` checks the setup")
+    return want, chosen, pdftoppm
 
 
 def _run(command: list[str], what: str) -> None:
@@ -64,6 +176,71 @@ def _run(command: list[str], what: str) -> None:
         raise PptxSkillsError(f"{what} failed (exit {result.returncode}): {tail}")
 
 
+def _libreoffice_pdf(soffice: Path, deck: Path, tmp: Path) -> Path:
+    profile = tmp / "lo-profile"
+    _run(
+        [str(soffice), "--headless", f"-env:UserInstallation={profile.as_uri()}", "--convert-to", _PDF_FILTER,
+         "--outdir", str(tmp), str(deck)],
+        "LibreOffice conversion",
+    )
+    pdf = tmp / f"{deck.stem}.pdf"
+    if not pdf.is_file():
+        raise PptxSkillsError(f"LibreOffice produced no PDF for {deck}")
+    return pdf
+
+
+def _powerpoint_pdf(prs, out_dir: Path, pdf: Path) -> Path:
+    """Export `prs` to `pdf` through PowerPoint; raises _PowerPointFailed.
+
+    PowerPoint is sandboxed: it writes only into folders the user granted, so the exchange folder sits inside
+    `out_dir`, next to the user's own files. It holds a copy with a unique name and every slide shown (PowerPoint
+    leaves hidden slides out of a PDF, so page n would no longer be slide n), and is always removed.
+    """
+    stem = f"render-{uuid.uuid4().hex}"
+    exchange = out_dir / f".pptx-{stem}"
+    try:
+        exchange.mkdir()
+    except OSError as exc:
+        raise _PowerPointFailed(f"cannot create {exchange}: {exc}") from exc
+    started = done = False
+    try:
+        for slide in prs.slides:
+            slide._element.attrib.pop("show", None)
+        copy, exported = exchange / f"{stem}.pptx", exchange / f"{stem}.pdf"
+        save_presentation(prs, copy)
+        started = True
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", _EXPORT_SCRIPT, str(copy), str(exported), stem],
+                capture_output=True, text=True, errors="replace", timeout=_POWERPOINT_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise _PowerPointFailed(f"timed out after {_POWERPOINT_TIMEOUT_S} s") from exc
+        if result.returncode != 0:
+            tail = (result.stderr or result.stdout or "").strip()[-400:]
+            raise _PowerPointFailed(f"osascript failed (exit {result.returncode}): {tail}")
+        if not exported.is_file() or exported.stat().st_size == 0:
+            raise _PowerPointFailed("PowerPoint wrote no PDF")
+        shutil.move(str(exported), str(pdf))
+        done = True
+        return pdf
+    except OSError as exc:
+        raise _PowerPointFailed(str(exc)) from exc
+    finally:
+        if started and not done:
+            _close_quietly(stem)
+        shutil.rmtree(exchange, ignore_errors=True)
+
+
+def _close_quietly(stem: str) -> None:
+    """Best effort: close the copy if PowerPoint still has it open, without saving; never launches PowerPoint."""
+    try:
+        subprocess.run(["osascript", "-e", _CLOSE_SCRIPT, stem], capture_output=True, text=True, errors="replace",
+                       timeout=_CLOSE_TIMEOUT_S)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+
+
 def default_out_dir(deck: Path) -> Path:
     from .deckdir import find_deck_dir, load_deck
 
@@ -74,31 +251,47 @@ def default_out_dir(deck: Path) -> Path:
     return deck.parent / f"{deck.stem}-render"
 
 
-def render(deck: Path, out_dir: Path | None = None, slides: list[int] | None = None, dpi: int = 120) -> list[Path]:
-    """Render the given slides (1-based, default all) to `slide-NN.png` in `out_dir`; returns the files."""
+def render(
+    deck: Path,
+    out_dir: Path | None = None,
+    slides: list[int] | None = None,
+    dpi: int = 120,
+    renderer: str | None = None,
+    notes: list[str] | None = None,
+) -> list[Path]:
+    """Render the given slides (1-based, default all) to `slide-NN.png` in `out_dir`; returns the files.
+
+    `renderer` is auto, powerpoint or libreoffice (default: PPTX_SKILLS_RENDERER, else auto). When auto picked
+    PowerPoint and it fails, LibreOffice renders instead and a message for the user is appended to `notes`.
+    """
     deck = Path(deck)
-    count = len(open_presentation(deck).slides)  # also validates the file
+    prs = open_presentation(deck)  # also validates the file
+    count = len(prs.slides)
     numbers = list(slides) if slides else list(range(1, count + 1))
     bad = [n for n in numbers if not 1 <= n <= count]
     if bad:
         raise PptxSkillsError(f"slide {bad[0]} does not exist; the deck has {count} slide(s)")
-    soffice, pdftoppm = _require_tools()
+    want, chosen, pdftoppm = _require_tools(renderer)
     out_dir = Path(out_dir) if out_dir is not None else default_out_dir(deck)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise PptxSkillsError(f"cannot create output folder {out_dir}: {exc}") from exc
     with tempfile.TemporaryDirectory(prefix="pptx-render-") as tmp_name:
         tmp = Path(tmp_name)
-        profile = tmp / "lo-profile"
-        _run(
-            [str(soffice), "--headless", f"-env:UserInstallation={profile.as_uri()}", "--convert-to", _PDF_FILTER,
-             "--outdir", str(tmp), str(deck)],
-            "LibreOffice conversion",
-        )
-        pdf = tmp / f"{deck.stem}.pdf"
-        if not pdf.is_file():
-            raise PptxSkillsError(f"LibreOffice produced no PDF for {deck}")
-        try:
-            out_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            raise PptxSkillsError(f"cannot create output folder {out_dir}: {exc}") from exc
+        pdf = None
+        if chosen == "powerpoint":
+            try:
+                pdf = _powerpoint_pdf(prs, out_dir, tmp / "deck.pdf")
+            except _PowerPointFailed as exc:
+                if want == "powerpoint" or find_soffice() is None:
+                    raise PptxSkillsError(f"PowerPoint could not export {deck.name} to PDF: {exc}. {_POWERPOINT_SETUP}. "
+                                          "A dialog may be waiting in PowerPoint.") from exc
+                if notes is not None:
+                    notes.append(f"PowerPoint could not render ({exc}), so LibreOffice did; "
+                                 "`pptx doctor` shows PowerPoint's one-time setup")
+        if pdf is None:
+            pdf = _libreoffice_pdf(find_soffice(), deck, tmp)
         written = []
         for n in numbers:
             prefix = tmp / f"page{n}"
@@ -156,8 +349,18 @@ def render_slide_sheet(pngs: list[Path], slide_numbers: list[int], out: Path) ->
     return contact_sheet(pngs, [f"Slide {n}" for n in slide_numbers], out)
 
 
-def render_layouts(deck: Path, out: Path) -> Path:
+def _scratch_beside(out: Path, what: str) -> tempfile.TemporaryDirectory:
+    """A temporary folder next to `out`: PowerPoint writes only where the user granted access, as for `out` itself."""
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise PptxSkillsError(f"cannot create folder {out.parent}: {exc}") from exc
+    return tempfile.TemporaryDirectory(prefix=f".pptx-{what}-", dir=out.parent)
+
+
+def render_layouts(deck: Path, out: Path, renderer: str | None = None, notes: list[str] | None = None) -> Path:
     """One slide per layout of `deck` (placeholders filled with their role name), labeled with the layout name."""
+    out = Path(out)
     prs = open_presentation(deck)
     delete_all_slides(prs)
     layouts = _layouts(prs)
@@ -169,16 +372,17 @@ def render_layouts(deck: Path, out: Path) -> Path:
             role = roles.get(ph.placeholder_format.idx, "other")
             if role != "picture" and ph.has_text_frame:
                 ph.text_frame.text = role
-    with tempfile.TemporaryDirectory(prefix="pptx-layouts-") as tmp_name:
+    with _scratch_beside(out, "layouts") as tmp_name:
         tmp = Path(tmp_name)
         save_presentation(prs, tmp / "layouts.pptx")
-        pngs = render(tmp / "layouts.pptx", tmp / "png", dpi=60)
+        pngs = render(tmp / "layouts.pptx", tmp / "png", dpi=60, renderer=renderer, notes=notes)
         return contact_sheet(pngs, names, out)
 
 
-def render_examples(examples: Path, out: Path) -> Path:
-    with tempfile.TemporaryDirectory(prefix="pptx-examples-") as tmp_name:
-        pngs = render(examples, Path(tmp_name), dpi=60)
+def render_examples(examples: Path, out: Path, renderer: str | None = None, notes: list[str] | None = None) -> Path:
+    out = Path(out)
+    with _scratch_beside(out, "examples") as tmp_name:
+        pngs = render(examples, Path(tmp_name), dpi=60, renderer=renderer, notes=notes)
         if not pngs:
             raise PptxSkillsError(f"{examples} has no slides to render")
         return contact_sheet(pngs, [f"Slide {i}" for i in range(1, len(pngs) + 1)], out)
@@ -193,8 +397,13 @@ def sources_hash(deck_dir: Path, deck: dict) -> str:
     return digest.hexdigest()
 
 
-def update_sheets(deck_dir: Path, deck: dict, previous_hash: str | None, force: bool = False) -> tuple[str | None, list[str]]:
-    """Write style/layouts.png (and examples.png); returns (sources_hash to store, notes for the user)."""
+def update_sheets(
+    deck_dir: Path, deck: dict, previous_hash: str | None, force: bool = False, renderer: str | None = None
+) -> tuple[str | None, list[str]]:
+    """Write style/layouts.png (and examples.png); returns (sources_hash to store, notes for the user).
+
+    Rendering never fails the caller: a missing or failing renderer becomes a note.
+    """
     deck_dir = Path(deck_dir)
     style = deck_dir / "style"
     current = sources_hash(deck_dir, deck)
@@ -202,17 +411,15 @@ def update_sheets(deck_dir: Path, deck: dict, previous_hash: str | None, force: 
     wanted = [style / LAYOUTS_SHEET] + ([style / EXAMPLES_SHEET] if examples else [])
     if not force and previous_hash == current and all(p.is_file() for p in wanted):
         return current, []
-    if find_soffice() is None:
-        return None, ["contact sheets skipped: LibreOffice not found — run `pptx doctor`"]
-    if find_pdftoppm() is None:
-        return None, ["contact sheets skipped: poppler (pdftoppm) not found — run `pptx doctor`"]
+    notes: list[str] = []
     try:
-        render_layouts(deck_dir / deck["working_copy"], style / LAYOUTS_SHEET)
+        _require_tools(renderer)
+        render_layouts(deck_dir / deck["working_copy"], style / LAYOUTS_SHEET, renderer, notes)
         if examples:
-            render_examples(Path(examples), style / EXAMPLES_SHEET)
+            render_examples(Path(examples), style / EXAMPLES_SHEET, renderer, notes)
     except (PptxSkillsError, OSError) as exc:
-        return None, [f"contact sheets skipped: {exc}"]
-    return current, []
+        return None, [*dict.fromkeys(notes), f"contact sheets skipped: {exc}"]
+    return current, list(dict.fromkeys(notes))
 
 
 def doctor(deck_dir: Path | None = None) -> dict:
@@ -222,8 +429,13 @@ def doctor(deck_dir: Path | None = None) -> dict:
         if family:
             path = find_font(family)
             fonts[family] = str(path) if path else None
-    soffice, pdftoppm = find_soffice(), find_pdftoppm()
+    want = requested_renderer()
+    app, soffice, pdftoppm = find_powerpoint(), find_soffice(), find_pdftoppm()
     return {
+        "renderer": select_renderer(want),
+        "requested_renderer": want,
+        "powerpoint": str(app) if app else None,
+        "powerpoint_version": powerpoint_version(app) if app else None,
         "soffice": str(soffice) if soffice else None,
         "pdftoppm": str(pdftoppm) if pdftoppm else None,
         "fonts": fonts,
@@ -231,9 +443,30 @@ def doctor(deck_dir: Path | None = None) -> dict:
 
 
 def _doctor_lines(report: dict) -> list[str]:
-    hints = {"soffice": "brew install --cask libreoffice (or apt install libreoffice)",
-             "pdftoppm": "brew install poppler (or apt install poppler-utils)"}
-    lines = [f"✓ {n}: {report[n]}" if report[n] else f"✗ {n}: missing; {hints[n]}" for n in ("soffice", "pdftoppm")]
+    want, chosen = report["requested_renderer"], report["renderer"]
+    if chosen:
+        how = "auto: PowerPoint if installed, else LibreOffice" if want == "auto" else f"set by {RENDERER_ENV}"
+        lines = [f"✓ renderer: {_LABELS[chosen]} ({how})"]
+    elif want == "auto":
+        lines = [f"✗ renderer: none; Microsoft PowerPoint (macOS) or LibreOffice is needed; {_INSTALL_HINT}"]
+    else:
+        lines = [f"✗ renderer: {_LABELS[want]} is set by {RENDERER_ENV} but not installed"]
+    if report["powerpoint"]:
+        version = f" {report['powerpoint_version']}" if report["powerpoint_version"] else ""
+        lines.append(f"✓ PowerPoint{version}: {report['powerpoint']}")
+        lines.append(f"  {_POWERPOINT_SETUP}. Until then a render may wait for a dialog in PowerPoint, "
+                     "fail, or fall back to LibreOffice.")
+    else:
+        lines.append("· PowerPoint: not found" + ("" if _MACOS else " (renders on macOS only)"))
+    if report["soffice"]:
+        lines.append(f"✓ soffice: {report['soffice']}" + (" (fallback)" if chosen == "powerpoint" else ""))
+    elif chosen == "powerpoint":
+        lines.append("· soffice: not found; not needed while PowerPoint renders")
+    else:
+        lines.append("✗ soffice: not found; brew install --cask libreoffice (add --appdir=~/Applications without admin "
+                     "rights) or apt install libreoffice")
+    lines.append(f"✓ pdftoppm: {report['pdftoppm']}" if report["pdftoppm"]
+                 else "✗ pdftoppm: missing; brew install poppler (or apt install poppler-utils)")
     for family, path in report["fonts"].items():
         lines.append(f"✓ font {family}: {path}" if path else f"✗ font {family}: not installed; install it or text is measured with a fallback")
     return lines
@@ -248,33 +481,44 @@ def _handle_render(args) -> int:
         except ValueError:
             raise PptxSkillsError(f"--slides expects numbers like 1,3; got {args.slides!r}") from None
     out_dir = Path(args.out) if args.out else default_out_dir(deck)
-    files = render(deck, out_dir, slides, args.dpi)
+    notes: list[str] = []
+    files = render(deck, out_dir, slides, args.dpi, args.renderer, notes)
     data = {"files": [str(f) for f in files]}
     if args.sheet:
         numbers = slides or list(range(1, len(files) + 1))
         data["sheet"] = str(render_slide_sheet(files, numbers, out_dir / "sheet.png"))
-    cli.emit(args, data, "\n".join([*data["files"], *([data["sheet"]] if args.sheet else [])]))
+    if notes:
+        data["notes"] = notes
+    cli.emit(args, data, "\n".join([*data["files"], *([data["sheet"]] if args.sheet else []), *notes]))
     return cli.OK
 
 
 def _handle_doctor(args) -> int:
     report = doctor(Path(args.deck_dir) if args.deck_dir else None)
-    ok = bool(report["soffice"] and report["pdftoppm"] and all(report["fonts"].values()))
+    ok = bool(report["renderer"] and report["pdftoppm"] and all(report["fonts"].values()))
     cli.emit(args, {**report, "ok": ok}, "\n".join(_doctor_lines(report)))
     return cli.OK if ok else cli.FINDINGS
 
 
+def add_renderer_option(parser) -> None:
+    parser.add_argument(
+        "--renderer", choices=RENDERERS,
+        help=f"auto (default: PowerPoint if installed, else LibreOffice), powerpoint or libreoffice; also {RENDERER_ENV}",
+    )
+
+
 def register(subparsers) -> None:
-    rnd = subparsers.add_parser("render", help="Render slides to PNG with LibreOffice and poppler.")
+    rnd = subparsers.add_parser("render", help="Render slides to PNG with PowerPoint or LibreOffice, and poppler.")
     rnd.add_argument("deck", help="deck (.pptx)")
     rnd.add_argument("--slides", help="comma-separated slide numbers, default all")
     rnd.add_argument("--dpi", type=int, default=120, help="resolution, default 120")
     rnd.add_argument("--sheet", action="store_true", help="also write sheet.png, a contact sheet of the rendered slides")
     rnd.add_argument("--out", help="output folder, default <deck-dir>/render or <deck>-render")
+    add_renderer_option(rnd)
     rnd.add_argument("--json", action="store_true", help="machine-readable output")
     rnd.set_defaults(handler=_handle_render)
 
-    doc = subparsers.add_parser("doctor", help="Check that rendering tools and the deck's fonts are installed.")
+    doc = subparsers.add_parser("doctor", help="Show the renderer and check that rendering tools and the deck's fonts are installed.")
     doc.add_argument("deck_dir", nargs="?", help="deck folder whose theme fonts to check")
     doc.add_argument("--json", action="store_true", help="machine-readable output")
     doc.set_defaults(handler=_handle_doctor)

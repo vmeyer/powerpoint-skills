@@ -1,9 +1,16 @@
 import json
+import os
+import plistlib
+import re
 import shutil
 import subprocess
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
+from pptx import Presentation
 
 from conftest import linked_deck
 from pptx_skills import render as render_mod
@@ -123,17 +130,17 @@ def test_doctor_reports_fonts_and_exit_code(monkeypatch, tmp_path, default_pptx,
     assert json.loads(capsys.readouterr().out)["ok"] is True
 
 
-def test_init_without_libreoffice_still_succeeds(monkeypatch, tmp_path, default_pptx, capsys):
+def test_init_without_a_renderer_still_succeeds(monkeypatch, tmp_path, default_pptx, capsys):
     monkeypatch.setattr(render_mod, "find_soffice", lambda: None)
     assert main(["init", str(tmp_path / "d"), "--from", str(default_pptx)]) == 0
-    assert "contact sheets skipped: LibreOffice not found — run `pptx doctor`" in capsys.readouterr().out
+    assert "contact sheets skipped: neither PowerPoint nor LibreOffice found" in capsys.readouterr().out
     assert not (tmp_path / "d/style/layouts.png").exists()
 
 
 def test_style_stores_hash_and_skips_unchanged_sheets(monkeypatch, tmp_path, default_pptx):
     rendered = []
 
-    def fake_layouts(deck, out):
+    def fake_layouts(deck, out, *args):
         rendered.append(out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"png")
@@ -196,7 +203,7 @@ def test_unwritable_sheet_is_a_pptx_error(tmp_path):
 
 
 def test_init_survives_sheet_write_failure(monkeypatch, tmp_path, default_pptx, capsys):
-    def boom(deck, out):
+    def boom(deck, out, *args):
         raise OSError("disk full")
 
     monkeypatch.setattr(render_mod, "find_soffice", lambda: render_mod.Path("/x/soffice"))
@@ -304,3 +311,268 @@ def test_render_real_with_a_hidden_slide(make_deck, tmp_path):
     last = render(deck, tmp_path / "last", slides=[3], dpi=20)
     with Image.open(last[0]) as image:
         assert image.convert("RGB").getpixel((image.width // 2, image.height // 2)) == (0, 0, 255)
+
+
+# --- PowerPoint as the preferred renderer -------------------------------------------------------
+
+
+@pytest.fixture
+def fake_powerpoint(monkeypatch, tmp_path):
+    """An installed PowerPoint (version 16.99) driven by a fake osascript; LibreOffice is missing unless a test adds it.
+
+    `state.behavior` decides what an export does: "ok" writes the PDF, "fail" exits 1 as an Automation denial does,
+    "timeout" never answers, "silent" exits 0 without a PDF. Every export records the copy PowerPoint was given.
+    """
+    app = tmp_path / "Applications/Microsoft PowerPoint.app"
+    (app / "Contents").mkdir(parents=True)
+    (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": "16.99"}))
+    monkeypatch.setattr(render_mod, "_POWERPOINT_PATHS", (tmp_path / "missing/Microsoft PowerPoint.app", app))
+    monkeypatch.setattr(render_mod, "_MACOS", True)
+    monkeypatch.setattr(render_mod, "find_soffice", lambda: None)
+    monkeypatch.setattr(render_mod, "find_pdftoppm", lambda: Path("/x/pdftoppm"))
+    state = SimpleNamespace(app=app, behavior="ok", exports=[], closes=[], soffice=[], pdftoppm=[])
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "osascript":
+            script, args = cmd[2], cmd[3:]
+            if script == render_mod._CLOSE_SCRIPT:
+                state.closes.append(args[0])
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            copy, pdf, stem = Path(args[0]), Path(args[1]), args[2]
+            shown = [slide._element.get("show") for slide in Presentation(str(copy)).slides]
+            state.exports.append({"copy": copy, "pdf": pdf, "stem": stem, "script": script, "shown": shown, "timeout": kwargs.get("timeout")})
+            if state.behavior == "timeout":
+                raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+            if state.behavior == "fail":
+                return subprocess.CompletedProcess(cmd, 1, "", "execution error: Not authorized to send Apple events to Microsoft PowerPoint. (-1743)")
+            if state.behavior == "ok":
+                shutil.copyfile(copy, pdf)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[0].endswith("soffice"):
+            state.soffice.append(cmd)
+            outdir = cmd[cmd.index("--outdir") + 1]
+            shutil.copyfile(cmd[-1], f"{outdir}/{Path(cmd[-1]).stem}.pdf")
+        else:
+            state.pdftoppm.append(cmd)
+            Image.new("RGB", (160, 90), "red").save(f"{cmd[-1]}-{cmd[cmd.index('-f') + 1]}.png")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(render_mod.subprocess, "run", fake_run)
+    return state
+
+
+def with_libreoffice(monkeypatch):
+    monkeypatch.setattr(render_mod, "find_soffice", lambda: Path("/x/soffice"))
+
+
+def test_auto_prefers_powerpoint_then_libreoffice(fake_powerpoint, monkeypatch):
+    with_libreoffice(monkeypatch)
+    assert render_mod.select_renderer("auto") == "powerpoint"
+    monkeypatch.setattr(render_mod, "_MACOS", False)  # PowerPoint renders on macOS only
+    assert render_mod.select_renderer("auto") == "libreoffice"
+    monkeypatch.setattr(render_mod, "_MACOS", True)
+    monkeypatch.setattr(render_mod, "_POWERPOINT_PATHS", ())
+    assert render_mod.select_renderer("auto") == "libreoffice"
+    monkeypatch.setattr(render_mod, "find_soffice", lambda: None)
+    assert render_mod.select_renderer("auto") is None
+
+
+def test_find_powerpoint_in_the_user_applications_folder_and_read_its_version(fake_powerpoint):
+    assert render_mod.find_powerpoint() == fake_powerpoint.app
+    assert render_mod.powerpoint_version(fake_powerpoint.app) == "16.99"
+    assert render_mod.powerpoint_version(fake_powerpoint.app.parent / "Other.app") is None
+
+
+def test_renderer_option_beats_the_environment_which_beats_auto(monkeypatch):
+    assert render_mod.requested_renderer() == "auto"
+    monkeypatch.setenv("PPTX_SKILLS_RENDERER", "LibreOffice")
+    assert render_mod.requested_renderer() == "libreoffice"
+    assert render_mod.requested_renderer("powerpoint") == "powerpoint"
+    monkeypatch.setenv("PPTX_SKILLS_RENDERER", "keynote")
+    with pytest.raises(PptxSkillsError, match="PPTX_SKILLS_RENDERER"):
+        render_mod.requested_renderer()
+
+
+def test_a_forced_renderer_must_be_installed(fake_powerpoint, monkeypatch, deck_with_two_slides, tmp_path):
+    with pytest.raises(PptxSkillsError, match=r"LibreOffice \(soffice\) not found.*brew install --cask libreoffice"):
+        render(deck_with_two_slides, tmp_path / "o", renderer="libreoffice")
+    monkeypatch.setattr(render_mod, "_POWERPOINT_PATHS", ())
+    with_libreoffice(monkeypatch)
+    monkeypatch.setenv("PPTX_SKILLS_RENDERER", "powerpoint")
+    with pytest.raises(PptxSkillsError, match="PowerPoint not found"):
+        render(deck_with_two_slides, tmp_path / "o")
+    assert fake_powerpoint.soffice == []
+
+
+def test_powerpoint_renders_an_unhidden_copy_inside_the_output_folder(fake_powerpoint, make_deck, tmp_path):
+    deck = hidden_deck(make_deck)
+    out = tmp_path / "out"
+    files = render(deck, out, dpi=77)
+    assert [p.name for p in files] == ["slide-01.png", "slide-02.png", "slide-03.png"]
+    (export,) = fake_powerpoint.exports
+    # PowerPoint may write only into folders the user granted, so the exchange folder sits in the output folder
+    assert export["copy"].parent.parent == out and export["copy"].parent.name.startswith(".pptx-render-")
+    assert re.fullmatch(r"render-[0-9a-f]{32}", export["stem"]) and export["copy"].name == f"{export['stem']}.pptx"
+    assert export["pdf"].parent == export["copy"].parent
+    assert export["shown"] == [None, None, None]  # PowerPoint's PDF would leave the hidden slide 2 out
+    assert open_presentation(deck).slides[1]._element.get("show") == "0"  # the deck itself is untouched
+    assert export["timeout"] == 120
+    assert [cmd[cmd.index("-r") + 1] for cmd in fake_powerpoint.pdftoppm] == ["77"] * 3
+    assert sorted(p.name for p in out.iterdir()) == ["slide-01.png", "slide-02.png", "slide-03.png"]
+    assert fake_powerpoint.closes == [] and fake_powerpoint.soffice == []
+
+
+def test_powerpoint_copies_are_unique_and_the_scripts_touch_nothing_else(fake_powerpoint, deck_with_two_slides, tmp_path):
+    render(deck_with_two_slides, tmp_path / "out")
+    render(deck_with_two_slides, tmp_path / "out", slides=[2])
+    first, second = fake_powerpoint.exports
+    assert first["stem"] != second["stem"]
+    assert first["script"] == render_mod._EXPORT_SCRIPT and str(first["copy"]) not in first["script"]  # paths are arguments
+    for script in (render_mod._EXPORT_SCRIPT, render_mod._CLOSE_SCRIPT):
+        assert "quit" not in script and "active presentation" not in script
+    assert "is running" in render_mod._CLOSE_SCRIPT  # cleaning up never launches PowerPoint
+
+
+@pytest.mark.parametrize("behavior, reason", [("fail", "-1743"), ("timeout", "timed out after 120 s"), ("silent", "no PDF")])
+def test_powerpoint_failure_without_libreoffice_explains_the_setup(fake_powerpoint, deck_with_two_slides, tmp_path, behavior, reason):
+    fake_powerpoint.behavior = behavior
+    out = tmp_path / "out"
+    with pytest.raises(PptxSkillsError) as exc:
+        render(deck_with_two_slides, out)
+    message = str(exc.value)
+    for needle in (reason, "Privacy & Security → Automation", "Grant Access", "~/projects", "dialog"):
+        assert needle in message
+    assert list(out.iterdir()) == []  # the exchange folder is gone
+    assert fake_powerpoint.closes == [fake_powerpoint.exports[0]["stem"]]  # only the copy is closed
+
+
+@pytest.mark.parametrize("behavior", ["fail", "timeout", "silent"])
+def test_powerpoint_failure_falls_back_to_libreoffice_with_a_note(fake_powerpoint, monkeypatch, deck_with_two_slides, tmp_path, behavior):
+    with_libreoffice(monkeypatch)
+    fake_powerpoint.behavior = behavior
+    notes = []
+    files = render(deck_with_two_slides, tmp_path / "out", notes=notes)
+    assert [p.name for p in files] == ["slide-01.png", "slide-02.png"] and len(fake_powerpoint.soffice) == 1
+    assert len(notes) == 1 and "PowerPoint" in notes[0] and "LibreOffice" in notes[0] and "pptx doctor" in notes[0]
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["slide-01.png", "slide-02.png"]
+
+
+def test_a_forced_powerpoint_does_not_fall_back(fake_powerpoint, monkeypatch, deck_with_two_slides, tmp_path):
+    with_libreoffice(monkeypatch)
+    fake_powerpoint.behavior = "fail"
+    with pytest.raises(PptxSkillsError, match="Grant Access"):
+        render(deck_with_two_slides, tmp_path / "out", renderer="powerpoint")
+    monkeypatch.setenv("PPTX_SKILLS_RENDERER", "powerpoint")
+    with pytest.raises(PptxSkillsError, match="Grant Access"):
+        render(deck_with_two_slides, tmp_path / "out")
+    assert fake_powerpoint.soffice == []
+
+
+def test_cli_render_takes_a_renderer_and_reports_the_fallback(fake_powerpoint, monkeypatch, deck_with_two_slides, tmp_path, capsys):
+    with_libreoffice(monkeypatch)
+    assert main(["render", str(deck_with_two_slides), "--renderer", "libreoffice", "--out", str(tmp_path / "a")]) == 0
+    assert fake_powerpoint.exports == [] and len(fake_powerpoint.soffice) == 1
+    capsys.readouterr()
+    fake_powerpoint.behavior = "fail"
+    assert main(["render", str(deck_with_two_slides), "--out", str(tmp_path / "b"), "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert len(data["files"]) == 2 and "LibreOffice" in data["notes"][0]
+    assert main(["render", str(deck_with_two_slides), "--out", str(tmp_path / "c")]) == 0
+    assert "LibreOffice" in capsys.readouterr().out.splitlines()[-1]
+    assert main(["render", str(deck_with_two_slides), "--renderer", "keynote"]) == 2
+
+
+def test_contact_sheets_render_next_to_the_sheet(fake_powerpoint, deck_with_two_slides, tmp_path):
+    style = tmp_path / "style"
+    render_layouts(deck_with_two_slides, style / "layouts.png")
+    render_examples(deck_with_two_slides, style / "examples.png")
+    assert len(fake_powerpoint.exports) == 2
+    assert all(style in export["copy"].parents for export in fake_powerpoint.exports)
+    assert sorted(p.name for p in style.iterdir()) == ["examples.png", "layouts.png"]  # no temporary folder left
+
+
+def test_style_takes_a_renderer_and_reports_the_fallback(fake_powerpoint, monkeypatch, tmp_path, default_pptx, capsys):
+    with_libreoffice(monkeypatch)
+    d = tmp_path / "d"
+    init_deck(d, default_pptx)
+    assert len(fake_powerpoint.exports) == 1 and (d / "style/layouts.png").is_file()
+    assert main(["style", str(d), "--refresh", "--renderer", "libreoffice"]) == 0
+    assert len(fake_powerpoint.exports) == 1 and len(fake_powerpoint.soffice) == 1
+    capsys.readouterr()
+    fake_powerpoint.behavior = "fail"
+    assert main(["style", str(d), "--refresh", "--json"]) == 0
+    notes = json.loads(capsys.readouterr().out)["notes"]
+    assert len(notes) == 1 and "LibreOffice" in notes[0]
+
+
+def test_init_survives_a_failing_powerpoint(fake_powerpoint, tmp_path, default_pptx, capsys):
+    fake_powerpoint.behavior = "timeout"
+    assert main(["init", str(tmp_path / "d"), "--from", str(default_pptx)]) == 0
+    assert "contact sheets skipped: PowerPoint could not export" in capsys.readouterr().out
+    assert sorted(p.name for p in (tmp_path / "d/style").iterdir()) == ["brief.json", "brief.md"]
+
+
+def test_init_survives_an_unknown_renderer_in_the_environment(monkeypatch, tmp_path, default_pptx, capsys):
+    monkeypatch.setenv("PPTX_SKILLS_RENDERER", "keynote")
+    assert main(["init", str(tmp_path / "d"), "--from", str(default_pptx)]) == 0
+    assert "contact sheets skipped: PPTX_SKILLS_RENDERER" in capsys.readouterr().out
+
+
+def test_doctor_names_the_renderer_and_powerpoints_one_time_setup(fake_powerpoint, monkeypatch, capsys):
+    report = doctor()
+    assert report["renderer"] == "powerpoint" and report["powerpoint"] == str(fake_powerpoint.app)
+    assert report["powerpoint_version"] == "16.99" and report["soffice"] is None
+    assert main(["doctor"]) == 0  # PowerPoint and poppler are enough
+    out = capsys.readouterr().out
+    assert "✓ renderer: PowerPoint" in out and "16.99" in out
+    assert "Privacy & Security → Automation" in out and "Grant Access" in out and "LibreOffice" in out
+    monkeypatch.setenv("PPTX_SKILLS_RENDERER", "libreoffice")
+    assert main(["doctor", "--json"]) == 1  # the forced LibreOffice is missing
+    data = json.loads(capsys.readouterr().out)
+    assert data["renderer"] is None and data["requested_renderer"] == "libreoffice" and data["ok"] is False
+    monkeypatch.delenv("PPTX_SKILLS_RENDERER")
+    monkeypatch.setattr(render_mod, "find_pdftoppm", lambda: None)
+    assert main(["doctor"]) == 1
+    assert "✗ pdftoppm" in capsys.readouterr().out
+
+
+def test_doctor_without_any_renderer(monkeypatch, capsys):
+    monkeypatch.setattr(render_mod, "find_soffice", lambda: None)
+    monkeypatch.setattr(render_mod, "find_pdftoppm", lambda: Path("/x/pdftoppm"))
+    assert doctor()["renderer"] is None
+    assert main(["doctor"]) == 1
+    out = capsys.readouterr().out
+    assert "✗ renderer" in out and "brew install --cask libreoffice" in out
+
+
+REAL_POWERPOINT = os.environ.get("PPTX_SKILLS_TEST_POWERPOINT") == "1"
+
+
+def _open_presentations() -> str:
+    script = ('if application "Microsoft PowerPoint" is running then\n'
+              'tell application "Microsoft PowerPoint" to return name of every presentation\nend if')
+    return subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=30).stdout
+
+
+@pytest.mark.real_powerpoint
+@pytest.mark.skipif(not REAL_POWERPOINT, reason="drives the real PowerPoint; set PPTX_SKILLS_TEST_POWERPOINT=1 to run it")
+def test_render_real_powerpoint(make_deck):
+    if render_mod.find_powerpoint() is None or find_pdftoppm() is None:
+        pytest.skip("PowerPoint or poppler not installed")
+    deck = hidden_deck(make_deck)
+    before = _open_presentations()
+    # PowerPoint writes only into folders the user granted, e.g. the projects folder that holds this repo
+    root = Path(tempfile.mkdtemp(prefix=".real-powerpoint-", suffix="-render", dir=Path(__file__).resolve().parent))
+    try:
+        out = render(deck, root / "all", dpi=20, renderer="powerpoint")
+        assert [p.name for p in out] == ["slide-01.png", "slide-02.png", "slide-03.png"]
+        colors = []
+        for path in out:
+            with Image.open(path) as image:
+                colors.append(image.convert("RGB").getpixel((image.width // 2, image.height // 2)))
+        assert colors == [(255, 0, 0), (0, 255, 0), (0, 0, 255)]  # page n is slide n, hidden or not
+        assert render_layouts(deck, root / "style/layouts.png", renderer="powerpoint").is_file()
+        assert not [p for p in root.rglob(".pptx-*")]
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    assert _open_presentations() == before  # the user's presentations stay as they were, no copy is left open

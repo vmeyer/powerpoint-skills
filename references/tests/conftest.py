@@ -367,6 +367,7 @@ def finding(report, rule, shape=None):
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "real_render: the test needs the real LibreOffice lookup")
+    config.addinivalue_line("markers", "real_powerpoint: the test drives the real PowerPoint (opt-in)")
 
 
 @pytest.fixture(autouse=True)
@@ -374,3 +375,11 @@ def _no_libreoffice(request, monkeypatch):
     """Keep `init`/`style` fast: contact sheets are skipped unless the test is about rendering."""
     if request.module.__name__ != "test_render" and not request.node.get_closest_marker("real_render"):
         monkeypatch.setattr("pptx_skills.render.find_soffice", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_powerpoint(request, monkeypatch):
+    """Never drive the user's PowerPoint from a test, and ignore a renderer chosen in the environment."""
+    monkeypatch.delenv("PPTX_SKILLS_RENDERER", raising=False)
+    if not request.node.get_closest_marker("real_powerpoint"):
+        monkeypatch.setattr("pptx_skills.render._POWERPOINT_PATHS", ())

@@ -43,9 +43,19 @@ uv run --project <plugin-root>/references pptx <command> …
   is short for that full command.
 
 Once per session run `pptx doctor` (in a deck: `pptx doctor decks/<slug>`, which also checks the
-theme fonts). It prints install commands for whatever is missing. Without LibreOffice and poppler
-there is no render: tell the user and stop. A missing theme font means renders and text
-measurement use a fallback; mention it when you show a slide.
+theme fonts). It names the renderer and prints install commands for whatever is missing.
+
+- Renders come from PowerPoint where it is installed (macOS), otherwise from LibreOffice; poppler
+  is needed either way. Suggest installing LibreOffice only when `doctor` finds no PowerPoint.
+- PowerPoint needs a one-time permission on the first render: the user allows automation of
+  PowerPoint and grants it access to the folder that holds the decks. Keep renders in the deck
+  folder (the default), as PowerPoint cannot write to temporary folders. If a render waits or fails
+  with an automation or access error, ask the user to answer the dialog in PowerPoint or follow the
+  steps `doctor` prints, then render again. If PowerPoint fails and LibreOffice is installed, the
+  render falls back to it and prints a note; pass that note on. `--renderer libreoffice` on
+  `render` and `style` skips PowerPoint.
+- Without a renderer or poppler there is no render: tell the user and stop. A missing theme font
+  means renders and text measurement use a fallback; mention it when you show a slide.
 
 ## Start or open a deck
 
@@ -141,9 +151,9 @@ go through [review-checklist.md](references/review-checklist.md) → write the n
 - `check` exits with 1 when it finds errors: text overflow, a shape off the slide, leftover
   template text, a font below the minimum. Fix every error before you show the slide. Fix
   warnings too, or say why one stays.
-- `check` measures text with the real font; the render comes from LibreOffice, whose line breaks
-  can differ slightly from PowerPoint. Leave slack: a box that is filled to the last line in the
-  render may overflow in PowerPoint.
+- `check` measures text with the real font. A PowerPoint render shows the slide as PowerPoint
+  draws it; a LibreOffice render can break lines slightly differently. Leave slack: a box that is
+  filled to the last line in a LibreOffice render may overflow in PowerPoint.
 - **At most three rounds** of self-correction. Then show the slide anyway and list what remains.
 
 ## Show and wait
