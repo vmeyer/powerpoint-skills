@@ -1,0 +1,11 @@
+{
+  "name": "powerpoint-skills",
+  "description": "Create, edit and check PowerPoint decks in the style of an existing master: the agent writes a YAML spec, a shared Python engine builds native, editable slides, and every deck is rendered to PNG and checked before delivery.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Volker Meyer"
+  },
+  "homepage": "https://github.com/vmeyer/powerpoint-skills",
+  "repository": "https://github.com/vmeyer/powerpoint-skills",
+  "license": "MIT"
+}
