@@ -13,7 +13,7 @@ from .brief import _layouts, load_brief
 from .errors import PptxSkillsError
 from .fonts import find_font
 from .opc import open_presentation, save_presentation
-from .slides import add_slide, delete_slide
+from .slides import add_slide, delete_all_slides
 
 _SOFFICE_PATHS = (
     Path("/Applications/LibreOffice.app/Contents/MacOS/soffice"),
@@ -157,8 +157,7 @@ def render_slide_sheet(pngs: list[Path], slide_numbers: list[int], out: Path) ->
 def render_layouts(deck: Path, out: Path) -> Path:
     """One slide per layout of `deck` (placeholders filled with their role name), labeled with the layout name."""
     prs = open_presentation(deck)
-    for slide in list(prs.slides):
-        delete_slide(prs, slide)
+    delete_all_slides(prs)
     layouts = _layouts(prs)
     names = [layout["name"] for layout in layouts]
     for info in layouts:

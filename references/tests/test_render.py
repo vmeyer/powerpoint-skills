@@ -5,11 +5,13 @@ import subprocess
 import pytest
 from PIL import Image
 
+from conftest import linked_deck
 from pptx_skills import render as render_mod
 from pptx_skills.brief import load_brief
 from pptx_skills.cli import main
 from pptx_skills.deckdir import init_deck, load_deck
 from pptx_skills.errors import PptxSkillsError
+from pptx_skills.opc import open_presentation
 from pptx_skills.render import contact_sheet, doctor, render_examples, update_sheets, find_pdftoppm, find_soffice, render, render_layouts
 
 REAL = find_soffice() is not None and find_pdftoppm() is not None
@@ -246,3 +248,12 @@ def test_render_examples_and_sheet_hash_paths(monkeypatch, fake_tools, deck_with
     n = len(fake_tools)
     update_sheets(d, deck, h)
     assert (d / "style/examples.png").is_file() and len(fake_tools) > n
+
+
+def test_layout_sheet_of_a_deck_whose_zoom_follows_its_target(fake_tools, make_deck, tmp_path):
+    """The deck's own slides are all dropped, so a zoom must not block dropping its target."""
+    deck = linked_deck(make_deck, source=3, target=1, zoom=True)
+    sheet = render_layouts(deck, tmp_path / "layouts.png")
+    assert sheet.is_file()
+    pages = [cmd for cmd in fake_tools if not cmd[0].endswith("soffice")]
+    assert len(pages) == len(open_presentation(deck).slide_layouts)  # one page per layout, no deck slide left

@@ -268,7 +268,7 @@ def test_delete_slide_removes_links_to_it(make_deck):
     import zipfile
 
     assert b"<p:sld " not in zipfile.ZipFile(deck).read("ppt/viewProps.xml")  # outline entry gone
-    assert any("links to it" in m for m in res["messages"])
+    assert "deleted slide 2: the links to it on slide 1 were removed (slide numbers as before the delete)" in res["messages"]
     apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Blank"}]})  # reopened: python-pptx renames slide parts
     assert _unique_part_names(deck) and len(open_presentation(deck).slides) == 3
 

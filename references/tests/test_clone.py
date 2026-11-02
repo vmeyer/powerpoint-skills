@@ -495,8 +495,8 @@ def test_slide_zoom_is_cloned_only_within_the_deck(make_deck, deck_dir_from_defa
     assert _click_target(copy, "zoom-fallback") is target.part
 
 
-@pytest.mark.parametrize("kind", ["sectionzoom", "summaryzoom"])
-def test_zooms_are_found_by_their_graphic_data(make_deck, deck_dir_from_default, kind):
+@pytest.mark.parametrize("kind, name", [("sectionzoom", "Section Zoom"), ("summaryzoom", "Summary Zoom")])
+def test_zooms_are_found_by_their_graphic_data(make_deck, deck_dir_from_default, kind, name):
     uri = f"http://schemas.microsoft.com/office/powerpoint/2016/{kind}"
 
     def build(prs):
@@ -508,7 +508,7 @@ def test_zooms_are_found_by_their_graphic_data(make_deck, deck_dir_from_default,
             f'<a:graphic><a:graphicData uri="{uri}"/></a:graphic></p:graphicFrame></mc:Choice></mc:AlternateContent>'))
 
     source = make_deck(build, name="zoom.pptx")
-    with pytest.raises(PptxSkillsError, match="slide 1 uses a Slide Zoom, which cannot be cloned"):
+    with pytest.raises(PptxSkillsError, match=f"slide 1 uses a {name}, which cannot be cloned"):
         apply(deck_dir_from_default / "d.pptx", [{"op": "clone_slide", "from": {"deck": str(source), "slide": 1}}])
 
 

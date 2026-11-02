@@ -22,7 +22,10 @@ FOOTER_TYPES = (PP_PLACEHOLDER.DATE, PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.SLIDE
 _HYPERLINKS = (qn("a:hlinkClick"), qn("a:hlinkHover"), qn("a:hlinkMouseOver"))
 # elements whose only job is to point at a slide: hyperlinks, and `p:sld` in outline views and custom shows
 _SLIDE_POINTERS = (*_HYPERLINKS, qn("p:sld"))
-_ZOOMS = tuple(f"http://schemas.microsoft.com/office/powerpoint/2016/{kind}" for kind in ("slidezoom", "sectionzoom", "summaryzoom"))
+_ZOOMS = {
+    f"http://schemas.microsoft.com/office/powerpoint/2016/{kind.replace(' ', '').lower()}": kind
+    for kind in ("Slide Zoom", "Section Zoom", "Summary Zoom")
+}
 
 
 def layout_named(prs, name: str):
@@ -214,11 +217,14 @@ def _numbers(prs) -> dict:
     return {s.part: n for n, s in enumerate(prs.slides, 1)}
 
 
-def _is_zoom(el) -> bool:
-    """A part of a Slide, Section or Summary Zoom: an element of their namespaces or a graphic frame holding one."""
+def _zoom_kind(el) -> str | None:
+    """"Slide Zoom", "Section Zoom" or "Summary Zoom" for an element of their namespaces or a graphic frame
+    holding one; None for anything else."""
     if not isinstance(el.tag, str):
-        return False
-    return etree.QName(el).namespace in _ZOOMS or (el.tag == qn("a:graphicData") and el.get("uri") in _ZOOMS)
+        return None
+    if el.tag == qn("a:graphicData") and el.get("uri") in _ZOOMS:
+        return _ZOOMS[el.get("uri")]
+    return _ZOOMS.get(etree.QName(el).namespace)
 
 
 def _refuse_zoom_target(prs, slide, verb: str) -> None:
@@ -228,7 +234,7 @@ def _refuse_zoom_target(prs, slide, verb: str) -> None:
     zooming = [
         numbers[s.part]
         for s in prs.slides
-        if s.part is not slide.part and any(_is_zoom(el) and el.get("sldId") == target for el in s._element.iter())
+        if s.part is not slide.part and any(_zoom_kind(el) and el.get("sldId") == target for el in s._element.iter())
     ]
     if zooming:
         raise PptxSkillsError(
@@ -262,7 +268,10 @@ def _unlink(prs, slide, notes: list[str]) -> None:
             source.rels.pop(rid)
     linking = sorted(numbers[source] for source in links if source in numbers)
     if linking:
-        notes.append(f"deleted slide {numbers[slide.part]}: the links to it on slide {', '.join(map(str, linking))} were removed")
+        notes.append(
+            f"deleted slide {numbers[slide.part]}: the links to it on slide {', '.join(map(str, linking))} were removed "
+            "(slide numbers as before the delete)"
+        )
 
 
 def _repoint_links(prs, old, new) -> None:
@@ -383,8 +392,9 @@ class _SlideCopy:
         c_sld = src.find(qn("p:cSld"))
         roots = [copy.deepcopy(el) for el in (c_sld.find(qn("p:spTree")), c_sld.find(qn("p:bg"))) if el is not None]
         self._drop_tags(roots, c_sld)
-        if not self.same_deck and any(_is_zoom(el) for root in roots for el in root.iter()):
-            self._refuse("a Slide Zoom")  # it names its target by slide id, which means another slide here
+        zoom = next((kind for root in roots for el in root.iter() if (kind := _zoom_kind(el))), None)
+        if zoom and not self.same_deck:
+            self._refuse(f"a {zoom}")  # it names its target by id, which means something else in another deck
         for root in roots:
             self._check(self.src.part, root)
 
