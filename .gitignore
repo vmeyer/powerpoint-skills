@@ -3,3 +3,12 @@ __pycache__/
 .venv/
 .pytest_cache/
 .superpowers/
+
+# Office files and decks are never committed: masters, example decks and
+# working copies may be confidential. Test fixtures are generated at test time.
+*.pptx
+*.potx
+*.pptm
+*.ppt
+*.odp
+decks/
