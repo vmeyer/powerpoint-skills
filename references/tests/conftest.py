@@ -117,6 +117,32 @@ def examples_with_three_accent1_rects(make_deck):
 
 
 @pytest.fixture
+def slide_with_box():
+    """(slide, textbox): a blank slide and a factory for word-wrapped text boxes on it.
+
+    `textbox(width_cm, text, size, family=None, height_cm=5)` sets `text` through python-pptx
+    ("\\n" starts a paragraph, "\\v" is a line break) and gives every run `size` pt and `family`.
+    """
+    from pptx.util import Cm, Pt
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(layout_named(prs, "Blank"))
+
+    def textbox(width_cm, text, size, family=None, height_cm=5):
+        box = slide.shapes.add_textbox(Cm(1), Cm(1), Cm(width_cm), Cm(height_cm))
+        box.text_frame.word_wrap = True
+        box.text_frame.text = text
+        for paragraph in box.text_frame.paragraphs:
+            for run in paragraph.runs:
+                run.font.size = Pt(size)
+                if family:
+                    run.font.name = family
+        return box
+
+    return slide, textbox
+
+
+@pytest.fixture
 def deck_dir_from_default(tmp_path, default_pptx):
     from pptx_skills.deckdir import init_deck
 
