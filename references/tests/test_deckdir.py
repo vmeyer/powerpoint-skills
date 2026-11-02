@@ -1,7 +1,9 @@
 import json
+import zipfile
 
 import pytest
 
+from conftest import linked_deck
 from pptx_skills.brief import BLOCK_END
 
 from pptx_skills.cli import main
@@ -237,3 +239,13 @@ def test_delete_slide_cleans_sections_and_custom_shows(make_deck, tmp_path):
     out = tmp_path / "o.pptx"
     prs.save(str(out))
     assert len(open_presentation(out).slides) == 0
+
+
+def test_init_strips_a_deck_with_a_slide_zoom(tmp_path, make_deck):
+    """init removes every slide, so a zoom on one of them does not block removing its target."""
+    source = linked_deck(make_deck, source=3, target=1, zoom=True, outline=1)  # the target goes first
+    init_deck(tmp_path / "decks/z", source)
+    working = tmp_path / "decks/z/z.pptx"
+    assert len(open_presentation(working).slides) == 0
+    names = zipfile.ZipFile(working).namelist()
+    assert len(names) == len(set(names)) and not [n for n in names if n.startswith("ppt/slides/")]

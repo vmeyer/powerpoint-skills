@@ -455,13 +455,17 @@ def test_replace_then_add_keeps_part_names_unique(deck_with_three_slides, other_
 
 # --- links into replaced slides, zooms, chart data -------------------------------------------
 
-def _zoom_target(slide):
-    rid = next(slide._element.iter(f"{{{SLIDE_ZOOM}}}sldZmObj")).get(qn("r:id"))
-    return slide.part.related_part(rid)
+def _zoom_ids(slide):
+    return [el.get("sldId") for el in slide._element.iter(f"{{{SLIDE_ZOOM}}}sldZmObj")]
+
+
+def _click_target(slide, name):
+    el = next(el for el in slide._element.iter(qn("p:cNvPr")) if el.get("name") == name)
+    return slide.part.related_part(el.find(qn("a:hlinkClick")).get(qn("r:id")))
 
 
 def test_replace_repoints_links_to_the_replaced_slide(make_deck, other_deck):
-    deck = linked_deck(make_deck, target=2, zoom=True, outline=True)
+    deck = linked_deck(make_deck, target=2, alternate=True, outline=2)
     old_id = open_presentation(deck).slides[1].slide_id
     apply(deck, [{"op": "replace_slide", "slide": 2, "from": {"deck": str(other_deck), "slide": 1}}])
     names = zipfile.ZipFile(deck).namelist()
@@ -469,20 +473,53 @@ def test_replace_repoints_links_to_the_replaced_slide(make_deck, other_deck):
     prs = open_presentation(deck)
     first, new = prs.slides[0], prs.slides[1]
     assert new.slide_id == old_id and new.shapes.title.text == "From other deck"
-    jump = next(s for s in first.shapes if s.name == "jump")
-    assert jump.click_action.target_slide.part is new.part
-    assert _zoom_target(first) is new.part
+    assert _click_target(first, "jump") is new.part
+    assert _click_target(first, "choice-link") is new.part  # a hyperlink inside mc:Choice too
     assert slide_links(prs) == {"/ppt/slides/slide1.xml": ["/ppt/slides/slide2.xml"], "/ppt/viewProps.xml": ["/ppt/slides/slide2.xml"]}
+    view = next(p for p in prs.part.package.iter_parts() if p.partname == "/ppt/viewProps.xml")
+    entries = list(etree.fromstring(view.blob).iter(qn("p:sld")))
+    assert len(entries) == 2 and all(view.related_part(e.get(qn("r:id"))) is new.part for e in entries)
 
 
 def test_slide_zoom_is_cloned_only_within_the_deck(make_deck, deck_dir_from_default):
     source = linked_deck(make_deck, target=2, zoom=True)
     deck = deck_dir_from_default / "d.pptx"
+    before = file_hash(deck)
     with pytest.raises(PptxSkillsError, match="slide 1 uses a Slide Zoom, which cannot be cloned"):
         apply(deck, [{"op": "clone_slide", "from": {"deck": str(source), "slide": 1}}])
+    assert file_hash(deck) == before
     apply(source, [{"op": "clone_slide", "from": {"deck": "self", "slide": 1}}])
     prs = open_presentation(source)
-    assert _zoom_target(prs.slides[3]) is prs.slides[1].part
+    copy, target = prs.slides[3], prs.slides[1]
+    assert _zoom_ids(copy) == [str(target.slide_id)]
+    assert _click_target(copy, "zoom-fallback") is target.part
+
+
+@pytest.mark.parametrize("kind", ["sectionzoom", "summaryzoom"])
+def test_zooms_are_found_by_their_graphic_data(make_deck, deck_dir_from_default, kind):
+    uri = f"http://schemas.microsoft.com/office/powerpoint/2016/{kind}"
+
+    def build(prs):
+        prs.slides.add_slide(layout_named(prs, "Blank")).shapes._spTree.append(etree.fromstring(
+            f'<mc:AlternateContent xmlns:mc="{MC}"><mc:Choice Requires="a14" xmlns:a14="{A14}">'
+            '<p:graphicFrame xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvGraphicFramePr><p:cNvPr id="9" name="zoom"/>'
+            '<p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></p:xfrm>'
+            f'<a:graphic><a:graphicData uri="{uri}"/></a:graphic></p:graphicFrame></mc:Choice></mc:AlternateContent>'))
+
+    source = make_deck(build, name="zoom.pptx")
+    with pytest.raises(PptxSkillsError, match="slide 1 uses a Slide Zoom, which cannot be cloned"):
+        apply(deck_dir_from_default / "d.pptx", [{"op": "clone_slide", "from": {"deck": str(source), "slide": 1}}])
+
+
+def test_zoom_target_cannot_be_replaced(make_deck, other_deck):
+    deck = linked_deck(make_deck, target=2, zoom=True)
+    before = file_hash(deck)
+    with pytest.raises(PptxSkillsError, match="cannot replace slide 2: it is the target of a Slide Zoom on slide 1; remove the zoom in PowerPoint first"):
+        apply(deck, [{"op": "replace_slide", "slide": 2, "from": {"deck": str(other_deck), "slide": 1}}])
+    assert file_hash(deck) == before
+    apply(deck, [{"op": "replace_slide", "slide": 3, "from": {"deck": str(other_deck), "slide": 1}}])  # not a target
+    assert open_presentation(deck).slides[2].shapes.title.text == "From other deck"
 
 
 @pytest.mark.parametrize("partname, content_type, reltype", [

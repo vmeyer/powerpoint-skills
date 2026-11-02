@@ -97,8 +97,9 @@ from the layout with their text and fields; leave them.
 
 ### delete_slide
 
-Removes a slide, including its entries in sections and custom shows. Links to it from other slides are removed
-(a Slide Zoom becomes its picture); `apply` notes which slides had them.
+Removes a slide, including its entries in sections and custom shows. Links to it from other slides are removed;
+`apply` notes which slides had them. A slide that a Slide Zoom on another slide shows cannot be deleted or
+replaced: ask the user to remove the zoom in PowerPoint first.
 
 ```json
 {"op": "delete_slide", "slide": "id:258"}
@@ -131,7 +132,7 @@ The copy gets the working copy's layout of the same name and keeps every shape, 
 with their data, tables, groups, web links and the speaker notes. Links to other slides survive only in a
 duplicate, and PowerPoint tags (add-in data) are dropped; `apply` reports both as notes. A missing layout name
 stops with the list of available layouts. A slide with an embedded object, video, audio, SmartArt, a chart
-whose data is not an embedded `.xlsx` workbook, or (from another deck) a Slide Zoom stops with
+whose data is not an embedded `.xlsx` workbook, or (from another deck) a Slide, Section or Summary Zoom stops with
 `slide N uses <type>, which cannot be cloned`; build that slide from its layout instead.
 
 ```json
@@ -155,10 +156,10 @@ A variant of slide 3, right after it:
 ### replace_slide
 
 Puts a copy of a slide from another deck in place of `slide`: same position, same slide id (so `"id:<n>"` refs
-and the storyline stay valid), same sections; links to it from other slides lead to the new version. `from`
-and the copying work as in `clone_slide`. Use it to bring
-slides the user edited in their own deck back into the working copy. The replaced version is gone from the
-working copy; the snapshot of the apply keeps it. The new slide becomes `"$last"`.
+and the storyline stay valid), same sections; links to it from other slides lead to the new version. A slide
+that a Slide Zoom shows is refused, as for `delete_slide`. `from` and the copying work as in `clone_slide`.
+Use it to bring slides the user edited in their own deck back into the working copy. The replaced version is
+gone from the working copy; the snapshot of the apply keeps it. The new slide becomes `"$last"`.
 
 ```json
 {"op": "replace_slide", "slide": "id:258", "from": {"deck": "board-deck.pptx", "slide": 4}}

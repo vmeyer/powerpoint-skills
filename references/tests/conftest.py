@@ -279,12 +279,17 @@ SLIDE_ZOOM = "http://schemas.microsoft.com/office/powerpoint/2016/slidezoom"
 _R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 
-def linked_deck(make_deck, target=2, zoom=False, outline=False, name="linked.pptx"):
-    """Three "Title Only" slides titled "Slide 1" to "Slide 3"; slide 1 links to slide `target`.
+P166 = "http://schemas.microsoft.com/office/powerpoint/2016/6/main"
 
-    The link is a rectangle named "jump" with a click action. With `zoom`, slide 1 also has a Slide Zoom on
-    the target: an `mc:AlternateContent` whose fallback is a linked picture named "zoom-fallback". With
-    `outline`, the view properties list the target slide in outline view.
+
+def linked_deck(make_deck, target=2, zoom=False, alternate=False, outline=0, source=1, name="linked.pptx"):
+    """Three "Title Only" slides titled "Slide 1" to "Slide 3"; slide `source` links to slide `target`.
+
+    The link is a rectangle named "jump" with a click action. Options, all on slide `source` and aimed at the target:
+    `zoom` adds a Slide Zoom as PowerPoint writes it (MS-PPTX `pslz:sldZmObj` names the slide by `sldId`; the
+    only slide relationship is the click action of the fallback picture "zoom-fallback"); `alternate` adds an
+    `mc:AlternateContent` whose `mc:Choice` holds a shape "choice-link" with a click action; `outline` lists
+    the target that many times in the outline view of the view properties, each with its own relationship.
     """
     from lxml import etree
     from pptx.enum.shapes import MSO_SHAPE
@@ -294,31 +299,44 @@ def linked_deck(make_deck, target=2, zoom=False, outline=False, name="linked.ppt
 
     def build(prs):
         slides = [title_slide(prs, f"Slide {n}") for n in (1, 2, 3)]
-        goal = slides[target - 1]
-        jump = slides[0].shapes.add_shape(MSO_SHAPE.RECTANGLE, Cm(1), Cm(5), Cm(3), Cm(2))
+        goal, host = slides[target - 1], slides[source - 1]
+        jump = host.shapes.add_shape(MSO_SHAPE.RECTANGLE, Cm(1), Cm(5), Cm(3), Cm(2))
         jump.name = "jump"
         jump.click_action.target_slide = goal
+        rid = jump._element.find(".//" + qn("a:hlinkClick")).get(qn("r:id"))
         if zoom:
-            pic = slides[0].shapes.add_picture(io.BytesIO(png_bytes()), Cm(6), Cm(5), Cm(4), Cm(3))
+            pic = host.shapes.add_picture(io.BytesIO(png_bytes()), Cm(6), Cm(5), Cm(4), Cm(3))
             pic.name = "zoom-fallback"
             pic.click_action.target_slide = goal
-            rid = pic._element.find(".//" + qn("a:hlinkClick")).get(qn("r:id"))
-            alternate = etree.fromstring(
+            image = pic._element.find(".//" + qn("a:blip")).get(qn("r:embed"))
+            frame = etree.fromstring(
                 f'<mc:AlternateContent xmlns:mc="{MC}"><mc:Choice xmlns:pslz="{SLIDE_ZOOM}" Requires="pslz">'
                 f'<p:graphicFrame {nsdecls("p", "a", "r")}><p:nvGraphicFramePr><p:cNvPr id="40" name="Slide Zoom"/>'
                 '<p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></p:xfrm>'
-                f'<a:graphic><a:graphicData uri="{SLIDE_ZOOM}"><pslz:sldZm><pslz:sldZmObj sldId="{goal.slide_id}" cId="0" r:id="{rid}"/>'
-                "</pslz:sldZm></a:graphicData></a:graphic></p:graphicFrame></mc:Choice><mc:Fallback/></mc:AlternateContent>"
+                f'<a:graphic><a:graphicData uri="{SLIDE_ZOOM}"><pslz:sldZm><pslz:sldZmObj sldId="{goal.slide_id}" cId="0">'
+                f'<pslz:zmPr id="{{00000000-0000-0000-0000-000000000001}}"><p166:blipFill xmlns:p166="{P166}">'
+                f'<a:blip r:embed="{image}"/><a:stretch><a:fillRect/></a:stretch></p166:blipFill>'
+                f'<p166:spPr xmlns:p166="{P166}"><a:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm>'
+                '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p166:spPr></pslz:zmPr></pslz:sldZmObj></pslz:sldZm>'
+                "</a:graphicData></a:graphic></p:graphicFrame></mc:Choice><mc:Fallback/></mc:AlternateContent>"
             )
-            pic._element.addprevious(alternate)
-            alternate.find(f"{{{MC}}}Fallback").append(pic._element)
+            pic._element.addprevious(frame)
+            frame.find(f"{{{MC}}}Fallback").append(pic._element)
+        if alternate:
+            host.shapes._spTree.append(etree.fromstring(
+                f'<mc:AlternateContent xmlns:mc="{MC}" xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main">'
+                f'<mc:Choice Requires="a14"><p:sp {nsdecls("p", "a", "r")}><p:nvSpPr><p:cNvPr id="50" name="choice-link">'
+                f'<a:hlinkClick r:id="{rid}" action="ppaction://hlinksldjump"/></p:cNvPr><p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
+                "<p:spPr/></p:sp></mc:Choice></mc:AlternateContent>"
+            ))
         if outline:
             view = next(p for p in prs.part.package.iter_parts() if p.partname == "/ppt/viewProps.xml")
-            rid = view.relate_to(goal.part, RT.SLIDE)
+            # each entry its own relationship, as python-pptx would otherwise reuse one
+            entries = "".join(f'<p:sld r:id="{view.rels._add_relationship(RT.SLIDE, goal.part)}" collapse="1"/>' for _ in range(outline))
             root = etree.fromstring(view.blob)
             root.find(qn("p:slideViewPr")).addnext(etree.fromstring(
                 f'<p:outlineViewPr {nsdecls("p", "a", "r")}><p:cViewPr><p:scale><a:sx n="33" d="100"/><a:sy n="33" d="100"/>'
-                f'</p:scale><p:origin x="0" y="0"/></p:cViewPr><p:sldLst><p:sld r:id="{rid}" collapse="1"/></p:sldLst></p:outlineViewPr>'
+                f'</p:scale><p:origin x="0" y="0"/></p:cViewPr><p:sldLst>{entries}</p:sldLst></p:outlineViewPr>'
             ))
             view.blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 

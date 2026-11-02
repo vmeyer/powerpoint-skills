@@ -11,7 +11,7 @@ from . import cli
 from .brief import build_brief, load_brief, write_brief
 from .errors import PptxSkillsError
 from .opc import file_hash, open_presentation, save_presentation
-from .slides import delete_slide
+from .slides import delete_all_slides
 
 _OWNED = ("changes", "snapshots", "render", "check", "style")
 
@@ -146,8 +146,7 @@ def init_deck(
         open_presentation(examples)
     _style_rules(_abs(style_file))
     if not keep_slides:
-        for slide in list(prs.slides):
-            delete_slide(prs, slide)
+        delete_all_slides(prs)
     deck_dir.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=f".{slug}-init-", dir=deck_dir.parent))
     try:

@@ -22,6 +22,7 @@ FOOTER_TYPES = (PP_PLACEHOLDER.DATE, PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.SLIDE
 _HYPERLINKS = (qn("a:hlinkClick"), qn("a:hlinkHover"), qn("a:hlinkMouseOver"))
 # elements whose only job is to point at a slide: hyperlinks, and `p:sld` in outline views and custom shows
 _SLIDE_POINTERS = (*_HYPERLINKS, qn("p:sld"))
+_ZOOMS = tuple(f"http://schemas.microsoft.com/office/powerpoint/2016/{kind}" for kind in ("slidezoom", "sectionzoom", "summaryzoom"))
 
 
 def layout_named(prs, name: str):
@@ -188,12 +189,12 @@ def _xml(part):
     return root, store
 
 
-def _links_to(prs, part) -> list:
-    """(part, rId) of every relationship to the slide `part` except the presentation's own.
+def _links_to(prs, part) -> dict:
+    """{part: [rId, …]} of every relationship to the slide `part` except the presentation's own.
 
     Only parts reachable without passing through `part` count: its own notes slide links back to it.
     """
-    found, seen, todo = [], {part, prs.part}, [prs.part]
+    found, seen, todo = {}, {part, prs.part}, [prs.part]
     while todo:
         source = todo.pop()
         for rid, rel in source.rels.items():
@@ -201,73 +202,107 @@ def _links_to(prs, part) -> list:
                 continue
             if rel.target_part is part:
                 if source is not prs.part:
-                    found.append((source, rid))
+                    found.setdefault(source, []).append(rid)
             elif rel.target_part not in seen:
                 seen.add(rel.target_part)
                 todo.append(rel.target_part)
     return found
 
 
-def _choice_of(el):
-    return next(el.iterancestors(f"{{{_MC}}}Choice"), None)
+def _numbers(prs) -> dict:
+    """{slide part: 1-based slide number}."""
+    return {s.part: n for n, s in enumerate(prs.slides, 1)}
+
+
+def _is_zoom(el) -> bool:
+    """A part of a Slide, Section or Summary Zoom: an element of their namespaces or a graphic frame holding one."""
+    if not isinstance(el.tag, str):
+        return False
+    return etree.QName(el).namespace in _ZOOMS or (el.tag == qn("a:graphicData") and el.get("uri") in _ZOOMS)
+
+
+def _refuse_zoom_target(prs, slide, verb: str) -> None:
+    """Zooms name their target by slide id and are not rewritten, so a slide a zoom shows must stay as it is."""
+    numbers = _numbers(prs)
+    target = str(slide.slide_id)
+    zooming = [
+        numbers[s.part]
+        for s in prs.slides
+        if s.part is not slide.part and any(_is_zoom(el) and el.get("sldId") == target for el in s._element.iter())
+    ]
+    if zooming:
+        raise PptxSkillsError(
+            f"cannot {verb} slide {numbers[slide.part]}: it is the target of a Slide Zoom on slide "
+            f"{', '.join(map(str, zooming))}; remove the zoom in PowerPoint first"
+        )
 
 
 def _unlink(prs, slide, notes: list[str]) -> None:
     """Remove every link to `slide` from the rest of the deck and drop the relationships behind them.
 
-    Hyperlinks and outline entries are removed; a zoom (markup inside `mc:Choice`) becomes its fallback,
-    usually a picture, as in applications without zoom support. Raises before any change when a link is
-    of another kind.
+    Hyperlinks (also inside `mc:Choice`) and outline entries are removed; any other kind of link raises
+    before anything changes. Each part is parsed and stored once, so a bytes-only part keeps all its edits.
     """
-    links = [(source, rid, *_xml(source)) for source, rid in _links_to(prs, slide.part)]
-    for source, rid, root, _ in links:
+    numbers = _numbers(prs)
+    links = {source: (rids, *_xml(source)) for source, rids in _links_to(prs, slide.part).items()}
+    for source, (rids, root, _) in links.items():
         for el, _, value in _refs(root):
-            if value == rid and el.tag not in _SLIDE_POINTERS and _choice_of(el) is None:
-                name = etree.QName(el).localname
-                raise PptxSkillsError(f"cannot delete slide id {slide.slide_id}: {source.partname} refers to it in <{name}>, which cannot be removed automatically")
-    for source, rid, root, store in links:
-        while refs := [el for el, _, value in _refs(root) if value == rid]:
-            choice = _choice_of(refs[0])
-            if choice is None:
-                refs[0].getparent().remove(refs[0])
-                continue
-            alternate = choice.getparent()
-            fallback = alternate.find(f"{{{_MC}}}Fallback")
-            for child in list(fallback) if fallback is not None else []:
-                alternate.addprevious(child)
-            alternate.getparent().remove(alternate)
+            if value in rids and el.tag not in _SLIDE_POINTERS:
+                where = f"slide {numbers[source]}" if source in numbers else str(source.partname)
+                raise PptxSkillsError(
+                    f"cannot delete slide {numbers[slide.part]}: {where} links to it in <{etree.QName(el).localname}>, "
+                    "which cannot be removed automatically; remove that link in PowerPoint first"
+                )
+    for source, (rids, root, store) in links.items():
+        for el, _, value in _refs(root):
+            if value in rids:
+                el.getparent().remove(el)
         store()
-        source.rels.pop(rid)
-    ids = {s.part: s.slide_id for s in prs.slides}
-    linking = sorted({ids[source] for source, *_ in links if source in ids})
+        for rid in rids:
+            source.rels.pop(rid)
+    linking = sorted(numbers[source] for source in links if source in numbers)
     if linking:
-        notes.append(f"deleted slide id {slide.slide_id}: the links to it on slide id(s) {', '.join(map(str, linking))} were removed")
+        notes.append(f"deleted slide {numbers[slide.part]}: the links to it on slide {', '.join(map(str, linking))} were removed")
 
 
 def _repoint_links(prs, old, new) -> None:
-    """Point every link to the slide part `old` (hyperlinks, zooms, outline entries) at `new`."""
-    for source, rid in _links_to(prs, old):
+    """Point every link to the slide part `old` (hyperlinks, outline entries) at `new`."""
+    for source, rids in _links_to(prs, old).items():
         root, store = _xml(source)
-        new_rid = source.relate_to(new, source.rels[rid].reltype)
+        new_ids = {rid: source.relate_to(new, source.rels[rid].reltype) for rid in rids}
         for el, attr, value in _refs(root):
-            if value == rid:
-                el.set(attr, new_rid)
+            if value in new_ids:
+                el.set(attr, new_ids[value])
         store()
-        source.rels.pop(rid)
+        for rid in rids:
+            source.rels.pop(rid)
 
 
 def delete_slide(prs, slide, notes: list[str] | None = None) -> None:
     """Remove the slide from the slide list, sections and custom shows, and drop its relationship.
 
-    Links to it from other slides (hyperlinks, zooms) and from the outline view are removed first, so the
-    old slide part does not stay in the file; a note for the user is appended to `notes`.
+    Links to it from other slides and from the outline view are removed first, so the old slide part does
+    not stay in the file; a note for the user is appended to `notes`. A slide that a Slide Zoom shows is
+    refused, since zooms are not rewritten.
     """
+    _refuse_zoom_target(prs, slide, "delete")
+    _delete(prs, slide, notes if notes is not None else [])
+
+
+def delete_all_slides(prs) -> None:
+    """Remove every slide. Zooms go together with their slides, so they do not block removing a target."""
+    for slide in list(prs.slides):
+        _delete(prs, slide, [])
+
+
+def _delete(prs, slide, notes: list[str]) -> None:
+    """Remove one slide and the links to it, without the zoom check."""
     root = prs.part._element
     id_list = prs.slides._sldIdLst
     for sld_id in list(id_list):
         if sld_id.id != slide.slide_id:
             continue
-        _unlink(prs, slide, notes if notes is not None else [])
+        _unlink(prs, slide, notes)
         for ref in root.iter(f"{{{_P14}}}sldId"):  # sections keep their (possibly empty) entries
             if ref.get("id") == str(sld_id.id):
                 ref.getparent().remove(ref)
@@ -329,8 +364,8 @@ class _SlideCopy:
     """Copies one slide into a destination deck and re-creates every relationship its XML refers to.
 
     Pictures (also SVG) are shared by content, charts get their own part and workbook, external links are
-    kept, links to other slides only within the same deck, PowerPoint tags are dropped. Anything else
-    (embedded objects, media, diagrams) is refused before the destination changes.
+    kept, links to other slides and Slide Zooms only within the same deck, PowerPoint tags are dropped.
+    Anything else (embedded objects, media, diagrams) is refused before the destination changes.
     """
 
     def __init__(self, src_prs, src_slide, dst_prs, notes: list[str] | None):
@@ -348,6 +383,8 @@ class _SlideCopy:
         c_sld = src.find(qn("p:cSld"))
         roots = [copy.deepcopy(el) for el in (c_sld.find(qn("p:spTree")), c_sld.find(qn("p:bg"))) if el is not None]
         self._drop_tags(roots, c_sld)
+        if not self.same_deck and any(_is_zoom(el) for root in roots for el in root.iter()):
+            self._refuse("a Slide Zoom")  # it names its target by slide id, which means another slide here
         for root in roots:
             self._check(self.src.part, root)
 
@@ -395,8 +432,7 @@ class _SlideCopy:
             if not _copyable(rel):
                 self._refuse(_type_name(rel))
             if rel.reltype == RT.SLIDE and not self.same_deck and el.tag not in _HYPERLINKS:
-                # only a hyperlink can be dropped; a zoom without its slide would be an empty frame
-                self._refuse("a Slide Zoom" if _choice_of(el) is not None else f"a link in <{etree.QName(el).localname}> to another slide")
+                self._refuse(f"a link in <{etree.QName(el).localname}> to another slide")  # only hyperlinks can be dropped
             if rel.reltype == RT.CHART:
                 self._check_chart(rel.target_part)
 
@@ -514,8 +550,10 @@ def clone_slide(src_prs, src_slide, dst_prs, after=None, notes: list[str] | None
 def replace_slide(dst_prs, target, src_prs, src_slide, notes: list[str] | None = None):
     """Put a copy of `src_slide` in place of `target`: same position, slide id, sections and custom shows.
 
-    Links to the target from other slides, zooms and the outline view now lead to the copy.
+    Links to the target from other slides and the outline view now lead to the copy. A slide that a Slide
+    Zoom shows is refused, since zooms are not rewritten.
     """
+    _refuse_zoom_target(dst_prs, target, "replace")
     slide = _SlideCopy(src_prs, src_slide, dst_prs, notes).make()
     id_list = dst_prs.slides._sldIdLst
     new = id_list[-1]

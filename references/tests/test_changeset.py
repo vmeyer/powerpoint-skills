@@ -255,16 +255,16 @@ def test_delete_then_add_keeps_part_names_unique(deck_with_two_slides):
 
 
 def test_delete_slide_removes_links_to_it(make_deck):
-    deck = linked_deck(make_deck, target=2, zoom=True, outline=True)
+    deck = linked_deck(make_deck, target=2, alternate=True, outline=2)
     res = apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 2}]})
     assert _unique_part_names(deck)
     prs = open_presentation(deck)
     first = prs.slides[0]
     assert [s.shapes.title.text for s in prs.slides] == ["Slide 1", "Slide 3"]
     assert slide_links(prs) == {}
-    assert first._element.find(".//" + qn("a:hlinkClick")) is None
-    assert next(first._element.iter(f"{{{MC}}}AlternateContent"), None) is None
-    assert "zoom-fallback" in [s.name for s in first.shapes]  # the zoom became its fallback picture
+    assert first._element.find(".//" + qn("a:hlinkClick")) is None  # also the one inside mc:Choice
+    choice = next(first._element.iter(f"{{{MC}}}Choice"))
+    assert choice.find(".//" + qn("p:cNvPr")).get("name") == "choice-link"  # the shape itself stays
     import zipfile
 
     assert b"<p:sld " not in zipfile.ZipFile(deck).read("ppt/viewProps.xml")  # outline entry gone
@@ -313,6 +313,17 @@ def test_delete_refuses_a_link_it_cannot_remove(make_deck):
         f'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:tags r:id="{rid}"/></p:custDataLst>'))
     prs.save(deck)
     before = file_hash(deck)
-    with pytest.raises(PptxSkillsError, match=r"cannot delete slide id \d+: /ppt/slides/slide1.xml refers to it in <tags>"):
+    with pytest.raises(PptxSkillsError, match=r"cannot delete slide 2: slide 1 links to it in <tags>, which cannot be removed automatically; remove that link in PowerPoint first"):
         apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 2}]})
     assert file_hash(deck) == before
+
+
+def test_zoom_target_cannot_be_deleted(make_deck):
+    deck = linked_deck(make_deck, target=2, zoom=True)
+    before = file_hash(deck)
+    with pytest.raises(PptxSkillsError, match=r"op 1 \(delete_slide\): cannot delete slide 2: it is the target of a Slide Zoom on slide 1; remove the zoom in PowerPoint first"):
+        apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 2}]})
+    assert file_hash(deck) == before
+    apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 3}]})  # not a zoom target
+    apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 1}, {"op": "delete_slide", "slide": 1}]})  # zoom first
+    assert _unique_part_names(deck) and len(open_presentation(deck).slides) == 0
