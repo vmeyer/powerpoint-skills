@@ -156,3 +156,50 @@ def test_load_brief_rejects_corrupt_json(tmp_path):
     (tmp_path / "style" / "brief.json").write_bytes(b"\xff\xfe\x00")
     with pytest.raises(PptxSkillsError, match="not valid JSON"):
         load_brief(tmp_path)
+
+
+P15 = "http://schemas.microsoft.com/office/powerpoint/2012/main"
+
+
+def _guide_ext(kind: str, guides: list[tuple[str | None, int]]) -> str:
+    """A `p:ext` with slide guides (`SLIDE_GUIDES`) or notes guides (`NOTES_GUIDES`)."""
+    tag = "notesGuideLst" if kind == NOTES_GUIDES else "sldGuideLst"
+    items = "".join(f'<p15:guide id="{i}"{f" orient=\"{o}\"" if o else ""} pos="{pos}"/>' for i, (o, pos) in enumerate(guides, 1))
+    return f'<p:ext uri="{{{kind}}}"><p15:{tag} xmlns:p15="{P15}">{items}</p15:{tag}></p:ext>'
+
+
+SLIDE_GUIDES, NOTES_GUIDES = "27BBF7A9-308A-43DC-89C8-2F10F3537804", "2D200454-40CA-4A62-9FC3-DE9A4176ACB9"
+VERTICAL, HORIZONTAL = [(None, 339), (None, 7340)], [("horz", 1094), ("horz", 3789)]
+
+
+def _add_ext(root, ext_xml: str) -> None:
+    from lxml import etree
+
+    ns = "http://schemas.openxmlformats.org/presentationml/2006/main"
+    ext_lst = root.find(f"{{{ns}}}extLst")
+    if ext_lst is None:
+        ext_lst = etree.SubElement(root, f"{{{ns}}}extLst")
+    ext_lst.append(etree.fromstring(f'<p:ext xmlns:p="{ns}"' + ext_xml[len("<p:ext"):]))
+
+
+def test_guides_ignore_notes_guides_and_duplicates(make_deck):
+    def build(prs):
+        prs.slide_width = Cm(33.87)
+        _add_ext(prs.slide_master._element, _guide_ext(SLIDE_GUIDES, VERTICAL + VERTICAL[:1] + HORIZONTAL + HORIZONTAL[1:]))
+        _add_ext(prs.part._element, _guide_ext(NOTES_GUIDES, [(None, 500), ("horz", 700)]))
+        _add_ext(prs.part._element, _guide_ext(SLIDE_GUIDES, [(None, 100), ("horz", 200)]))
+
+    b = build_brief(open_presentation(make_deck(build)))
+    assert b["guides"] == {"vertical": [1.49, 32.37], "horizontal": [4.82, 16.71]}  # the master's, each once
+    assert b["content_area_source"] == "guides"
+
+
+def test_presentation_guides_when_the_master_has_none(make_deck):
+    def build(prs):
+        prs.slide_width = Cm(33.87)
+        _add_ext(prs.part._element, _guide_ext(SLIDE_GUIDES, VERTICAL + HORIZONTAL))
+        _add_ext(prs.part._element, _guide_ext(NOTES_GUIDES, [(None, 500)]))
+
+    b = build_brief(open_presentation(make_deck(build)))
+    assert b["guides"] == {"vertical": [1.49, 32.37], "horizontal": [4.82, 16.71]}
+    assert b["content_area"] == pytest.approx([1.5, 4.82, 30.87, 11.88], abs=0.02)

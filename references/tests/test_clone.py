@@ -418,7 +418,7 @@ def test_cloned_texts_rolled_back_when_the_log_fails(deck_dir, monkeypatch):
 
 
 def test_outside_a_deck_folder_clone_writes_no_deck_json(tmp_path, default_pptx, examples_deck):
-    res = apply_changeset(default_pptx, {"ops": [{"op": "clone_slide", "from": {"deck": str(examples_deck), "slide": 2}}]})
+    res = apply_changeset(default_pptx, {"ops": [{"op": "clone_slide", "from": {"deck": str(examples_deck), "slide": 2}}]}, outside_deck=True)
     assert res["seq"] is None and not (tmp_path / "deck.json").exists()
     assert len(open_presentation(default_pptx).slides) == 1
 

@@ -9,9 +9,10 @@ from lxml import etree
 
 from .changeset import Context, _walk, op, resolve_shape
 from .colors import RGB_OPTION, apply_color, parse_color
+from . import timing
 from .errors import PptxSkillsError
 from .geometry import Box, _xfrm, snap_box
-from .ops_text import _format, _shorthand, write_paragraphs
+from .ops_text import _format, _shorthand, prune_text_animation, slide_number, write_paragraphs
 from .slides import resolve_slide
 
 _PRESETS = {
@@ -213,14 +214,19 @@ def _update_shape(ctx: Context, spec: dict) -> None:
     if shape.shape_type is not None and shape.shape_type.name == "GROUP" and set(spec) & set(_STYLE_FIELDS):
         raise PptxSkillsError(f'"{shape.name}" is a group; change its children')
     _style(shape, spec)
+    if "text" in spec or "paragraphs" in spec:
+        prune_text_animation(ctx, slide, shape)
     ctx.touched.add(slide.slide_id)
 
 
 @op("delete_shape")
 def _delete_shape(ctx: Context, spec: dict) -> None:
     slide = resolve_slide(ctx.prs, spec["slide"], ctx.last_slide)
-    element = resolve_shape(slide, spec["target"])._element
+    shape = resolve_shape(slide, spec["target"])
+    element = shape._element
     element.getparent().remove(element)
+    if timing.drop_shapes(slide._element, timing.shape_ids(element)):
+        ctx.messages.append(f'slide {slide_number(ctx, slide)}: the animation of "{shape.name}" was removed with it')
     ctx.touched.add(slide.slide_id)
 
 
@@ -295,4 +301,6 @@ def _ungroup(ctx: Context, spec: dict) -> None:
             _convert(xfrm, group_xfrm)
         group.addprevious(child)
     group.getparent().remove(group)
+    if timing.drop_shapes(slide._element, {shape.shape_id}):
+        ctx.messages.append(f'slide {slide_number(ctx, slide)}: the animation of the group "{shape.name}" was removed with it')
     ctx.touched.add(slide.slide_id)

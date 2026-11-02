@@ -12,7 +12,7 @@ from pptx_skills.opc import open_presentation
 
 
 def apply(deck, ops):
-    return apply_changeset(deck, {"label": "t", "ops": ops})
+    return apply_changeset(deck, {"label": "t", "ops": ops}, outside_deck=True)
 
 
 def slide1(deck):

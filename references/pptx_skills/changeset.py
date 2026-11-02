@@ -13,7 +13,7 @@ from pptx.oxml.ns import qn
 
 from . import cli, slides
 from .brief import load_brief
-from .deckdir import changed_externally, find_deck_dir, load_deck, record_apply
+from .deckdir import changed_externally, deck_using_as_source, find_deck_dir, load_deck, record_apply
 from .errors import PptxSkillsError
 from .geometry import absolute_box
 from .inventory import shape_text, table_cell_texts
@@ -137,7 +137,31 @@ def _run(ctx: Context, ops: list) -> None:
             raise PptxSkillsError(f"op {number} ({spec['op']}): unexpected {type(exc).__name__}: {exc}") from exc
 
 
-def apply_changeset(deck_path: Path, changeset: dict) -> dict:
+def _check_target(deck_path: Path, is_working_copy: bool, outside_deck: bool) -> None:
+    """Refuse to write anything but a working copy (R28): never a template or a deck's style source, and any
+    other file only with `outside_deck`."""
+    if deck_path.suffix.lower() == ".potx":
+        raise PptxSkillsError(
+            f"{deck_path} is a template, and apply never writes a .potx; start a deck from it with "
+            f"`pptx init decks/<slug> --from {deck_path}` and apply the change set to its working copy"
+        )
+    owner = deck_using_as_source(deck_path)
+    if owner is not None:
+        raise PptxSkillsError(
+            f"{deck_path} is a style source of the deck folder {owner}, and apply never writes the user's original; "
+            f"apply the change set to that deck's working copy instead"
+        )
+    if not is_working_copy and not outside_deck:
+        raise PptxSkillsError(
+            f"{deck_path} is not the working copy of a deck folder, and apply writes only working copies so the "
+            f"user's own file stays untouched; start a deck from it with `pptx init decks/<slug> --from {deck_path}` "
+            "(add --keep-slides to keep its slides), or pass --outside-deck to change this file in place without "
+            "snapshot or change log"
+        )
+
+
+def apply_changeset(deck_path: Path, changeset: dict, outside_deck: bool = False) -> dict:
+    """Apply `changeset` to the working copy `deck_path`; `outside_deck` also allows any other .pptx (R28)."""
     deck_path = Path(deck_path)
     validate_changeset(changeset)
     for spec in changeset["ops"]:
@@ -148,9 +172,10 @@ def apply_changeset(deck_path: Path, changeset: dict) -> dict:
     deck = load_deck(deck_dir) if deck_dir else None
     if deck is not None and deck["working_copy"] != deck_path.name:
         deck_dir, deck = None, None  # a stray file next to deck.json, not the working copy
+    _check_target(deck_path, deck_dir is not None, outside_deck)
     messages: list[str] = []
     if deck_dir is None:
-        messages.append("not inside a deck folder: no snapshot and no change-log entry were written")
+        messages.append("--outside-deck: the file was changed in place; no snapshot and no change-log entry are kept")
     elif changed_externally(deck_dir):
         messages.append("the working copy changed outside the agent since the last apply; the change set was applied to the current file")
     if lock_file(deck_path):
@@ -366,7 +391,7 @@ def _handle_apply(args) -> int:
         raise PptxSkillsError(f"cannot read {path}: {exc}") from exc
     except ValueError as exc:
         raise PptxSkillsError(f"{path} is not valid JSON: {exc}") from exc
-    result = apply_changeset(Path(args.deck), changeset)
+    result = apply_changeset(Path(args.deck), changeset, args.outside_deck)
     lines = [f"Applied {len(changeset['ops'])} op(s)" + (f" as change {result['seq']:03d}" if result["seq"] else "")]
     if result["touched"]:
         lines.append("touched slide ids: " + ", ".join(str(i) for i in result["touched"]))
@@ -379,5 +404,10 @@ def register(subparsers) -> None:
     apply = subparsers.add_parser("apply", help="Validate and apply a JSON change set to a working copy.")
     apply.add_argument("deck", help="working copy (.pptx)")
     apply.add_argument("changeset", help="change set (JSON file)")
+    apply.add_argument(
+        "--outside-deck", action="store_true",
+        help="also change a .pptx that is not a deck folder's working copy, in place and without snapshot or change log "
+        "(never a .potx or a deck's style source)",
+    )
     apply.add_argument("--json", action="store_true", help="machine-readable output")
     apply.set_defaults(handler=_handle_apply)

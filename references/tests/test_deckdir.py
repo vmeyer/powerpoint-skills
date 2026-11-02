@@ -337,3 +337,15 @@ def test_init_strips_a_deck_with_a_slide_zoom(tmp_path, make_deck):
     assert len(open_presentation(working).slides) == 0
     names = zipfile.ZipFile(working).namelist()
     assert len(names) == len(set(names)) and not [n for n in names if n.startswith("ppt/slides/")]
+
+
+def test_init_without_kept_slides_drops_the_sections(tmp_path, make_deck):
+    from conftest import P14, sectioned_deck, sections
+
+    source = sectioned_deck(make_deck)
+    init_deck(tmp_path / "s", source)
+    prs = open_presentation(tmp_path / "s/s.pptx")
+    assert prs.part._element.find(f".//{{{P14}}}sectionLst") is None
+    assert len(open_presentation(source).slides) == 3  # the source is untouched
+    init_deck(tmp_path / "k", source, keep_slides=True)
+    assert sections(open_presentation(tmp_path / "k/k.pptx")) == sections(open_presentation(source))

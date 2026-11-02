@@ -9,6 +9,7 @@ from pptx.util import Pt
 
 from .changeset import Context, op, resolve_shape
 from .colors import RGB_OPTION, apply_color, parse_color
+from . import timing
 from .errors import PptxSkillsError
 from .slides import resolve_slide
 
@@ -137,6 +138,20 @@ def write_paragraphs(text_frame, paragraphs: list[dict], font: dict | None = Non
             _format(run, run_spec, font, allow_rgb)
 
 
+def slide_number(ctx: Context, slide) -> int:
+    return [s.slide_id for s in ctx.prs.slides].index(slide.slide_id) + 1
+
+
+def prune_text_animation(ctx: Context, slide, shape) -> None:
+    """After new text: drop the animation steps of paragraphs the shape no longer has (R27)."""
+    count = len(shape.text_frame.paragraphs)
+    if timing.drop_paragraphs(slide._element, shape.shape_id, count):
+        ctx.messages.append(
+            f'slide {slide_number(ctx, slide)}: "{shape.name}" now has {count} paragraph(s); the animation steps of '
+            "the paragraphs that are gone were removed"
+        )
+
+
 @op("set_text")
 def _set_text(ctx: Context, spec: dict) -> None:
     slide = resolve_slide(ctx.prs, spec["slide"], ctx.last_slide)
@@ -145,4 +160,5 @@ def _set_text(ctx: Context, spec: dict) -> None:
         raise PptxSkillsError(f'shape {shape.shape_id} "{shape.name}" has no text frame')
     paragraphs = _shorthand(spec["text"], spec.get("font") or {}) if "text" in spec else spec["paragraphs"]
     write_paragraphs(shape.text_frame, paragraphs, spec.get("font"))
+    prune_text_animation(ctx, slide, shape)
     ctx.touched.add(slide.slide_id)

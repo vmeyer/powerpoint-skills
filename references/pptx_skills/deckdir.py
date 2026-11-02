@@ -64,6 +64,25 @@ def find_deck_dir(pptx_path: Path) -> Path | None:
     return parent if _deck_json(parent).is_file() else None
 
 
+def deck_using_as_source(path: Path) -> Path | None:
+    """The deck folder that uses `path` as a style source (master, examples or style file), or None.
+
+    Looks at the deck folder next to the file and at every `decks/*/` of the current folder.
+    """
+    target = Path(path).resolve()
+    candidates = [target.parent, *(p.parent for p in Path.cwd().glob("decks/*/deck.json"))]
+    for folder in dict.fromkeys(c.resolve() for c in candidates):
+        if not _deck_json(folder).is_file():
+            continue
+        try:
+            sources = load_deck(folder)["sources"].values()
+        except PptxSkillsError:
+            continue  # a broken deck.json names no sources we could trust
+        if any(src and Path(src).resolve() == target for src in sources):
+            return folder
+    return None
+
+
 def _abs(path: Path | None) -> str | None:
     return str(Path(path).resolve()) if path is not None else None
 

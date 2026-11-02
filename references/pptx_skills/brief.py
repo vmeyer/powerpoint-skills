@@ -78,15 +78,18 @@ def _text_styles(prs) -> dict:
 
 
 def _guides(prs) -> dict:
-    vertical, horizontal = [], []
+    """Slide guides in cm, each once: the master's, else the presentation's. Notes-page guides do not count."""
     for root in (prs.slide_master._element, prs.part._element):
-        for guide in root.iter(f"{{{_P15}}}guide"):
-            pos = guide.get("pos")
-            if pos is None:
-                continue
-            target = horizontal if guide.get("orient") == "horz" else vertical
-            target.append(round(guide_to_cm(int(pos)), 2))
-    return {"vertical": sorted(vertical), "horizontal": sorted(horizontal)}
+        found = {
+            (guide.get("orient") == "horz", int(guide.get("pos")))
+            for guide_list in root.iter(f"{{{_P15}}}sldGuideLst")
+            for guide in guide_list.findall(f"{{{_P15}}}guide")
+            if (guide.get("pos") or "").lstrip("-").isdigit()
+        }
+        if found:
+            break
+    cm = lambda horz: sorted({round(guide_to_cm(pos), 2) for h, pos in found if h == horz})  # noqa: E731
+    return {"vertical": cm(False), "horizontal": cm(True)}
 
 
 def _layout_title_box(layout) -> Box | None:

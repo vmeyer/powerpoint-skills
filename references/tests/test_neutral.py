@@ -81,3 +81,23 @@ def test_invalid_style_file(tmp_path, potx_file, data, key):
             init_deck(tmp_path / "d", source, style_file=bad)
         assert not (tmp_path / "d").exists()
     assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".")] == []
+
+
+def test_neutral_date_is_a_current_date_field():
+    from datetime import date
+
+    from pptx.oxml.ns import qn
+
+    from pptx_skills.slides import add_slide
+
+    prs = neutral_presentation({})
+    today = date.today()
+    for part in [prs.slide_master, *prs.slide_layouts]:
+        dates = [f for f in part._element.iter(qn("a:fld")) if f.get("type", "").startswith("datetime")]
+        assert dates, part.name
+        for field in dates:  # a plain date field PowerPoint and LibreOffice refresh, not the template's fixed 1/27/13
+            assert field.get("type") == "datetime1"
+            assert field.findtext(qn("a:t")) == f"{today.month}/{today.day}/{today.year}"
+    slide = add_slide(prs, "Title Only")
+    assert [f.get("type") for f in slide._element.iter(qn("a:fld"))].count("datetime1") == 1
+    assert "1/27/13" not in "".join(t.text or "" for t in slide._element.iter(qn("a:t")))

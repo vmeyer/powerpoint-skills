@@ -321,9 +321,18 @@ def delete_slide(prs, slide, notes: list[str] | None = None) -> None:
 
 
 def delete_all_slides(prs) -> None:
-    """Remove every slide. Zooms go together with their slides, so they do not block removing a target."""
+    """Remove every slide, and the sections, which would all be empty.
+
+    Zooms go together with their slides, so they do not block removing a target.
+    """
     for slide in list(prs.slides):
         _delete(prs, slide, [])
+    for section_list in list(prs.part._element.iter(f"{{{_P14}}}sectionLst")):
+        ext = section_list.getparent()  # p:ext of the presentation's extLst
+        ext_lst = ext.getparent()
+        ext_lst.remove(ext)
+        if len(ext_lst) == 0:
+            ext_lst.getparent().remove(ext_lst)
 
 
 def _delete(prs, slide, notes: list[str]) -> None:

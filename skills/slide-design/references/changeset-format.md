@@ -13,7 +13,10 @@ only if every op succeeded. On any error nothing is written and the message star
 change set to `changes/NNN-<label>.json` and prints the touched slide ids plus notes, for example when the
 deck was changed outside the agent or is open in PowerPoint. Add `--json` for machine-readable output.
 
-Outside a deck folder (no `deck.json` next to the file) `apply` still works but writes no snapshot or log.
+`apply` writes only the working copy of a deck folder (the `.pptx` named in the `deck.json` next to it), so the
+user's own files stay untouched. For any other `.pptx` it stops and suggests `pptx init`. Only when the user wants
+a file outside a deck folder changed in place, add `--outside-deck`: the file is then written without snapshot or
+change log. `apply` never writes a `.potx` or a file that a deck folder uses as its master, examples or style file.
 
 ## Ops
 
@@ -324,6 +327,9 @@ line to move it. Boxes of shapes inside a group cannot be changed; ungroup first
 
 `z_order` takes `to`: `front`, `back`, `forward` or `backward`. A group encloses its children exactly; only
 top-level shapes that are not placeholders can be grouped. Ungroup keeps every child at its place on the slide.
+Animations never point to something that is gone: deleting a shape (or a group) removes the animation steps of it
+and its children, ungrouping removes the group's own animation, and new text with fewer paragraphs (`set_text`,
+`update_shape`) removes the steps of the paragraphs that are gone. `apply` notes each removal.
 
 ```
 {"op": "delete_shape", "slide": 1, "target": {"name": "hatch"}}

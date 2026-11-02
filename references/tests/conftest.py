@@ -152,10 +152,13 @@ def deck_dir_from_default(tmp_path, default_pptx):
 
 
 def apply(deck, ops, label=None):
-    """Apply `ops` as one change set to the working copy `deck` and return the result."""
+    """Apply `ops` as one change set to `deck` and return the result.
+
+    `deck` is a working copy or any generated test deck (applied in place, as with --outside-deck).
+    """
     from pptx_skills.changeset import apply_changeset
 
-    return apply_changeset(deck, {"ops": ops} if label is None else {"label": label, "ops": ops})
+    return apply_changeset(deck, {"ops": ops} if label is None else {"label": label, "ops": ops}, outside_deck=True)
 
 
 P14 = "http://schemas.microsoft.com/office/powerpoint/2010/main"

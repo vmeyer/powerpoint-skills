@@ -1,6 +1,7 @@
 """Style files and the neutral 16:9 template for decks without a PowerPoint master."""
 
 import json
+from datetime import date
 from functools import cache
 from importlib import resources
 from pathlib import Path
@@ -92,6 +93,19 @@ def _style_theme(prs, colors: dict, fonts: dict) -> None:
     part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
 
+def _current_dates(prs) -> None:
+    """The default template's date placeholders hold a "date figured out" field with a fixed 1/27/13, which
+    LibreOffice shows as is; a plain date field shows the current date in PowerPoint and LibreOffice alike."""
+    today = date.today()
+    for part in [prs.slide_master, *prs.slide_layouts]:
+        for field in part._element.iter(qn("a:fld")):
+            if field.get("type") == "datetimeFigureOut":
+                field.set("type", "datetime1")
+                text = field.find(qn("a:t"))
+                if text is not None:
+                    text.text = f"{today.month}/{today.day}/{today.year}"
+
+
 def neutral_presentation(style: dict | None = None):
     """python-pptx's default template as 16:9 with the neutral (or the style file's) colors and fonts."""
     style = validate_style(style or {})
@@ -99,5 +113,6 @@ def neutral_presentation(style: dict | None = None):
     prs.slide_width, prs.slide_height = _WIDTH, _HEIGHT
     prs.part._element.find(qn("p:sldSz")).attrib.pop("type", None)  # the default template says screen4x3
     _scale_x(prs)
+    _current_dates(prs)
     _style_theme(prs, {**NEUTRAL_COLORS, **style.get("colors", {})}, {**NEUTRAL_FONTS, **style.get("fonts", {})})
     return prs

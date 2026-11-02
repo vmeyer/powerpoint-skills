@@ -80,10 +80,71 @@ def test_label_is_sanitised(deck_dir_from_default):
 
 
 def test_outside_deck_folder_applies_without_log(tmp_path, default_pptx):
-    res = apply_changeset(default_pptx, {"ops": [{"op": "add_slide", "layout": "Blank"}]})
+    res = apply_changeset(default_pptx, {"ops": [{"op": "add_slide", "layout": "Blank"}]}, outside_deck=True)
     assert len(open_presentation(default_pptx).slides) == 1
-    assert res["seq"] is None and any("not inside a deck folder" in m for m in res["messages"])
+    assert res["seq"] is None and any("no snapshot and no change-log entry" in m for m in res["messages"])
     assert not (tmp_path / "changes").exists()
+
+
+# --- apply writes only working copies unless told otherwise (R28) ----------------------------------
+
+ADD = {"ops": [{"op": "add_slide", "layout": "Blank"}]}
+
+
+def test_apply_refuses_a_file_that_is_not_a_working_copy(default_pptx):
+    before = file_hash(default_pptx)
+    with pytest.raises(PptxSkillsError, match="not the working copy of a deck folder") as exc:
+        apply_changeset(default_pptx, ADD)
+    assert "--outside-deck" in str(exc.value) and "pptx init" in str(exc.value)
+    assert file_hash(default_pptx) == before
+
+
+def test_apply_refuses_a_stray_file_in_a_deck_folder(deck_dir_from_default, default_pptx):
+    stray = deck_dir_from_default / "copy.pptx"
+    stray.write_bytes(default_pptx.read_bytes())
+    with pytest.raises(PptxSkillsError, match="not the working copy"):
+        apply_changeset(stray, ADD)
+    apply_changeset(stray, ADD, outside_deck=True)
+    assert len(open_presentation(stray).slides) == 1 and load_deck(deck_dir_from_default)["seq"] == 0
+
+
+def test_apply_never_writes_a_template(potx_file):
+    before = file_hash(potx_file)
+    for flag in (False, True):
+        with pytest.raises(PptxSkillsError, match=r"\.potx"):
+            apply_changeset(potx_file, ADD, outside_deck=flag)
+    assert file_hash(potx_file) == before
+
+
+def test_apply_never_writes_a_style_source(tmp_path, monkeypatch, default_pptx, examples_deck):
+    from pptx_skills.deckdir import init_deck
+
+    monkeypatch.chdir(tmp_path)
+    init_deck(tmp_path / "decks/d", default_pptx, examples_deck)
+    for source in (default_pptx, examples_deck):  # found through decks/*/deck.json of the current folder
+        before = file_hash(source)
+        with pytest.raises(PptxSkillsError, match="style source of the deck folder"):
+            apply_changeset(source, ADD, outside_deck=True)
+        assert file_hash(source) == before
+    other = tmp_path / "decks/e"
+    inside = other / "examples.pptx"
+    other.mkdir(parents=True)
+    inside.write_bytes(examples_deck.read_bytes())
+    init_deck(other, default_pptx, inside)  # an examples deck kept inside the deck folder
+    monkeypatch.chdir(tmp_path / "decks")
+    with pytest.raises(PptxSkillsError, match="style source"):
+        apply_changeset(inside, ADD, outside_deck=True)
+
+
+def test_cli_apply_outside_deck(tmp_path, default_pptx, capsys):
+    cs = tmp_path / "cs.json"
+    cs.write_text(json.dumps(ADD))
+    assert main(["apply", str(default_pptx), str(cs)]) == 2
+    assert "--outside-deck" in capsys.readouterr().err
+    assert main(["apply", str(default_pptx), str(cs), "--outside-deck"]) == 0
+    assert "no snapshot and no change-log entry" in capsys.readouterr().out
+    assert main(["apply", "--help"]) == 0
+    assert "--outside-deck" in capsys.readouterr().out
 
 
 def test_slide_refs_and_delete(deck_dir_from_default):
@@ -211,7 +272,7 @@ def test_add_slide_copies_date_footer_and_number(make_deck):
     deck = _footer_layout_deck(make_deck)
     apply_changeset(deck, {"ops": [
         {"op": "add_slide", "layout": "Title Only"},
-        {"op": "set_text", "slide": "$last", "target": {"role": "title"}, "text": "Footers come from the layout"}]})
+        {"op": "set_text", "slide": "$last", "target": {"role": "title"}, "text": "Footers come from the layout"}]}, outside_deck=True)
     slide = open_presentation(deck).slides[0]
     layout = {ph.placeholder_format.type: ph for ph in slide.slide_layout.placeholders}
     placed = {ph.placeholder_format.type: ph for ph in slide.placeholders}
@@ -234,7 +295,7 @@ def test_add_slide_copies_date_footer_and_number(make_deck):
 def test_slide_number_text_follows_position(make_deck):
     deck = _footer_layout_deck(make_deck)
     apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Title Only"}, {"op": "add_slide", "layout": "Title Only"},
-                                   {"op": "add_slide", "layout": "Title Only", "after": 1}]})
+                                   {"op": "add_slide", "layout": "Title Only", "after": 1}]}, outside_deck=True)
     numbers = [next(ph for ph in s.placeholders if ph.placeholder_format.type == PP_PLACEHOLDER.SLIDE_NUMBER).text_frame.text
                for s in open_presentation(deck).slides]
     assert numbers == ["1", "2", "3"]
@@ -249,14 +310,14 @@ def _unique_part_names(path) -> bool:
 
 def test_delete_then_add_keeps_part_names_unique(deck_with_two_slides):
     # python-pptx names a new slide part after the slide count; a deleted slide must not make that name collide
-    apply_changeset(deck_with_two_slides, {"ops": [{"op": "delete_slide", "slide": 1}, {"op": "add_slide", "layout": "Blank"}]})
+    apply_changeset(deck_with_two_slides, {"ops": [{"op": "delete_slide", "slide": 1}, {"op": "add_slide", "layout": "Blank"}]}, outside_deck=True)
     assert _unique_part_names(deck_with_two_slides)
     assert [s.slide_layout.name for s in open_presentation(deck_with_two_slides).slides] == ["Title Only", "Blank"]
 
 
 def test_delete_slide_removes_links_to_it(make_deck):
     deck = linked_deck(make_deck, target=2, alternate=True, outline=2)
-    res = apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 2}]})
+    res = apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 2}]}, outside_deck=True)
     assert _unique_part_names(deck)
     prs = open_presentation(deck)
     first = prs.slides[0]
@@ -269,13 +330,13 @@ def test_delete_slide_removes_links_to_it(make_deck):
 
     assert b"<p:sld " not in zipfile.ZipFile(deck).read("ppt/viewProps.xml")  # outline entry gone
     assert "deleted slide 2: the links to it on slide 1 were removed (slide numbers as before the delete)" in res["messages"]
-    apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Blank"}]})  # reopened: python-pptx renames slide parts
+    apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Blank"}]}, outside_deck=True)  # reopened: python-pptx renames slide parts
     assert _unique_part_names(deck) and len(open_presentation(deck).slides) == 3
 
 
 def test_delete_linked_slide_then_add(make_deck):
     deck = linked_deck(make_deck, target=3)
-    apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 3}, {"op": "add_slide", "layout": "Blank"}]})
+    apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 3}, {"op": "add_slide", "layout": "Blank"}]}, outside_deck=True)
     assert _unique_part_names(deck)
     prs = open_presentation(deck)
     assert [s.slide_layout.name for s in prs.slides] == ["Title Only", "Title Only", "Blank"] and slide_links(prs) == {}
@@ -314,7 +375,7 @@ def test_delete_refuses_a_link_it_cannot_remove(make_deck):
     prs.save(deck)
     before = file_hash(deck)
     with pytest.raises(PptxSkillsError, match=r"cannot delete slide 2: slide 1 links to it in <tags>, which cannot be removed automatically; remove that link in PowerPoint first"):
-        apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 2}]})
+        apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 2}]}, outside_deck=True)
     assert file_hash(deck) == before
 
 
@@ -322,10 +383,10 @@ def test_zoom_target_cannot_be_deleted(make_deck):
     deck = linked_deck(make_deck, target=2, zoom=True)
     before = file_hash(deck)
     with pytest.raises(PptxSkillsError, match=r"op 1 \(delete_slide\): cannot delete slide 2: it is the target of a Slide Zoom on slide 1; remove the zoom in PowerPoint first"):
-        apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 2}]})
+        apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 2}]}, outside_deck=True)
     assert file_hash(deck) == before
-    apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 3}]})  # not a zoom target
-    apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 1}, {"op": "delete_slide", "slide": 1}]})  # zoom first
+    apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 3}]}, outside_deck=True)  # not a zoom target
+    apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 1}, {"op": "delete_slide", "slide": 1}]}, outside_deck=True)  # zoom first
     assert _unique_part_names(deck) and len(open_presentation(deck).slides) == 0
 
 
