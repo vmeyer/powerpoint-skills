@@ -213,6 +213,19 @@ def run_checks(deck_path: Path, slides: list[int] | None = None, all_slides: boo
     return report
 
 
+def structure_errors(prs) -> list[str]:
+    """What the structure rules (reopen, relationships, duplicate-ids) find in an open presentation, as messages."""
+    ctx = Context(prs, None, dict(DEFAULT_RULES), None)
+    views = [SlideView(n, s.slide_id, s, {"shapes": []}) for n, s in enumerate(prs.slides, 1)]
+    found: list[Finding] = []
+    for item in RULES:
+        if item.category != "structure":
+            continue
+        ctx._current = item
+        found += item.func(ctx, None) if item.scope == "deck" else [f for view in views for f in item.func(ctx, view)]
+    return [f"{f'slide {f.slide}' if f.slide else 'deck'} ({f.rule}): {f.message}" for f in found]
+
+
 def _write_slide_reports(deck_dir: Path, views: list[SlideView], findings: list[dict]) -> None:
     out = Path(deck_dir) / "check"
     out.mkdir(exist_ok=True)
