@@ -6,7 +6,7 @@ from pptx.oxml.ns import qn
 
 from ..fonts import _Inheritance, _layout_placeholder, effective_run_style, measure_paragraphs
 from ..geometry import absolute_box
-from ..inventory import plain_text
+from ..inventory import plain_text, table_cell_texts
 from ..units import EMU_PER_CM
 from . import rule
 
@@ -87,6 +87,24 @@ def leftover_text(ctx, slide):
             why = "it is still the text of the cloned example slide"
         if why:
             out.append(ctx.finding(slide, item, f"template text is left over: {why}", "replace the template text with the real content"))
+    for item, shape in slide.shapes():
+        if item["kind"] == "table":
+            out += _leftover_cells(ctx, slide, item, shape, cloned)
+    return out
+
+
+def _leftover_cells(ctx, slide, item, shape, cloned) -> list:
+    """Table cells that still hold Lorem/TODO/XXX or the text of the cloned example table."""
+    out = []
+    for r, row in enumerate(table_cell_texts(shape)):
+        for c, text in enumerate(row):
+            if (match := _LEFTOVER.search(text)):
+                why = f"it contains {match.group(0)!r}"
+            elif (key := f"{item['id']}:r{r}c{c}") in cloned and _norm(cloned[key]) == _norm(text):
+                why = "it is still the text of the cloned example slide"
+            else:
+                continue
+            out.append(ctx.finding(slide, item, f"template text is left over in table cell row {r + 1}, column {c + 1}: {why}", "replace the template text with the real content"))
     return out
 
 

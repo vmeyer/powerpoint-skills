@@ -11,7 +11,7 @@ before anyone reads the cells.
 | development over time: milestones, a roadmap | [Timeline](#timeline) |
 | three to six parallel facts of equal weight | [Tiles](#tiles) |
 | numbers: size, trend, share | [Chart](#chart-coming) (coming) |
-| many values the reader looks up | [Table](#table-coming) (coming) |
+| many values the reader looks up | [Table](#table) |
 
 If none fits, the slide may carry two arguments: split it.
 
@@ -288,16 +288,15 @@ Chart box: x 1.69, w 21.91 − 1.69 = 20.22; takeaway: the third box.
  "series": [{"name": "Lead time (days)", "values": [42, 35, 28, 25]}], "legend": "none", "labels": true}
 ```
 
-## Table (coming)
-
-> The `add_table` op comes in a later version; until then `apply` rejects it. For a few values,
-> use a comparison or a matrix of text cells.
+## Table
 
 **Use when** the reader looks values up: many rows of the same attributes, reference data. **Not**
 to carry an argument by itself; give it an action title and emphasize the rows that prove it.
 
 Structure: the full content width, or two of three columns with the takeaway in the third (as for
-a chart). A header row, few columns, short cell texts.
+a chart). A header row, few columns, short cell texts. If the brief's building blocks list a
+table, clone it and fill it with `set_table` instead; it keeps the master's table style.
+For a few values, a comparison or a matrix of text cells reads better.
 
 ```bash
 pptx grid decks/<slug> --cols 1

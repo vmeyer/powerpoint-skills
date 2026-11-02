@@ -76,8 +76,9 @@ After `init`:
    brief; free compositions start from the layout with only kicker and title) and the grid
    (`pptx grid`). If you cannot write the title as a statement, ask before you build.
    When a building block in the brief's catalog fits the form (a lined table, KPI tiles), start
-   from it: `clone_slide` from `"examples"`, then replace every example text. `check` reports
-   example text left unchanged as `leftover-text`.
+   from it: `clone_slide` from `"examples"`, then replace every example text (table cells with
+   `set_table`, which keeps the table style and the last row's formatting). `check` reports
+   example text left unchanged, in table cells too, as `leftover-text`.
 3. **Apply one change set** ([changeset-format.md](references/changeset-format.md)). Write it to
    `decks/<slug>/change.json` and run `pptx apply decks/<slug>/<slug>.pptx decks/<slug>/change.json`.
    `apply` validates first and changes nothing on an error. On success it keeps a snapshot

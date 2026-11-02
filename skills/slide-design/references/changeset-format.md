@@ -26,13 +26,14 @@ Outside a deck folder (no `deck.json` next to the file) `apply` still works but 
 | [`replace_slide`](#replace_slide) | put a slide from another deck in place of a slide, keeping its position and id |
 | [`set_text`](#set_text) | write the text of a placeholder or shape |
 | [`add_shape`](#add_shape) | add a rectangle, rounded rectangle, arrow, chevron, ellipse or text box |
+| [`add_table`, `set_table`](#add_table-set_table) | add a native table, or fill and resize a cloned one |
 | [`add_line`](#add_line) | add a straight line, with arrowheads if wanted |
 | [`update_shape`](#update_shape) | move, resize, restyle, rename or re-text a shape |
 | [`delete_shape`](#delete_shape-z_order-group-ungroup) | remove a shape |
 | [`z_order`](#delete_shape-z_order-group-ungroup) | bring a shape to the front or send it back |
 | [`group`, `ungroup`](#delete_shape-z_order-group-ungroup) | group shapes or dissolve a group |
 
-Coming in a later version (rejected by `apply` until then): ops for tables, charts, pictures and speaker
+Coming in a later version (rejected by `apply` until then): ops for charts, pictures and speaker
 notes. A cloned slide already brings its tables, charts and pictures along.
 
 ## Envelope
@@ -323,6 +324,42 @@ top-level shapes that are not placeholders can be grouped. Ungroup keeps every c
 {"op": "group", "slide": 1, "targets": [{"name": "matrix-cell-r1-c1"}, {"name": "badge-1"}], "name": "row-1"}
 {"op": "ungroup", "slide": 1, "target": {"name": "row-1"}}
 ```
+
+## Tables
+
+### add_table, set_table
+
+`add_table` adds a native table; `box` is `[x, y, w, h]` in cm (snapped like shapes), `rows` the cell texts, all
+rows with the same number of columns. Cell text uses the `text` shorthand (`\n` = paragraph, `**bold**`);
+plain runs inherit the weight of the table style, so header cells stay bold.
+
+| Field | Meaning |
+|---|---|
+| `header` | first row is the header, default `true` |
+| `col_widths` | column widths in cm, one per column; the table is as wide as their sum (default: equal widths in `box`) |
+| `style_id` | table style GUID, e.g. the one a cloned example table uses (`table_styles` in `style/brief.json`) |
+| `font` | `{size, color, bold}` for every cell |
+| `fills` | cell fills `{"row,col": color}`, 0-based, theme colors as elsewhere |
+
+Without `style_id` the table uses PowerPoint's built-in "Medium Style 2 - Accent 1" (accent 1 header, tinted
+body); banded rows are switched off. For the master's own look, clone a table slide from the examples and
+use `set_table`; a custom style exists only in the deck that defines it, so `style_id` is for built-in GUIDs.
+
+`set_table` writes the cell texts of an existing table (`target` as for any shape), usually one cloned from the
+examples. It keeps the table style and the cell formatting, adds rows by copying the last row and removes
+surplus rows. The number of columns must match; it never adds or removes columns.
+
+```json
+{"op": "add_table", "slide": "$last", "name": "table-options", "box": [1.69, 4.45, 30.48, 6],
+ "rows": [["Option", "Cost"], ["Buy", "Low"], ["Build", "**High**"]], "col_widths": [10, 20.48], "font": {"size": 11}}
+```
+
+```json
+{"op": "set_table", "slide": "$last", "target": {"role": "table"}, "rows": [["Region", "Revenue"], ["North", "4 M"]]}
+```
+
+`pptx inventory` lists a table's cell texts as `"table": [[...]]`. Cloned example cells count as example text:
+`check` flags them with `leftover-text` until replaced.
 
 ## Grid
 

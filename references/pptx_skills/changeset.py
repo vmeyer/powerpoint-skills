@@ -16,7 +16,7 @@ from .brief import load_brief
 from .deckdir import changed_externally, find_deck_dir, load_deck, record_apply
 from .errors import PptxSkillsError
 from .geometry import absolute_box
-from .inventory import shape_text
+from .inventory import shape_text, table_cell_texts
 from .opc import lock_file, open_presentation, save_presentation
 from .roles import placeholder_role
 
@@ -289,9 +289,16 @@ def _source(ctx: Context, ref: dict):
 
 
 def _example_texts(slide) -> dict[str, str]:
-    """{shape id: text} of a slide's text shapes, without the master's date, footer and slide number."""
+    """{shape id: text} of a slide's text shapes, without the master's date, footer and slide number.
+
+    Table cells are recorded as `"<shape id>:r<row>c<col>"` (0-based).
+    """
     texts = {}
     for shape in _walk(slide.shapes):
+        if getattr(shape, "has_table", False) and shape.has_table:
+            for r, row in enumerate(table_cell_texts(shape)):
+                texts.update({f"{shape.shape_id}:r{r}c{c}": t for c, t in enumerate(row) if t.strip()})
+            continue
         if shape.is_placeholder and shape.placeholder_format.type in slides.FOOTER_TYPES:
             continue
         text = shape_text(shape)
@@ -341,8 +348,8 @@ def _replace_slide(ctx: Context, spec: dict) -> None:
     _copied(ctx, slide, kind, carried, spec["from"]["deck"], notes)
 
 
-# Ops modules register themselves on import; the bottom import avoids a cycle. Modules: ops_text, ops_shapes.
-from . import ops_shapes, ops_text  # noqa: E402,F401
+# Ops modules register themselves on import; the bottom import avoids a cycle. Modules: ops_text, ops_shapes, ops_tables.
+from . import ops_shapes, ops_tables, ops_text  # noqa: E402,F401
 
 
 def _handle_apply(args) -> int:

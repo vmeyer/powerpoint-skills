@@ -99,7 +99,10 @@ def _run(r) -> dict:
 
 
 def _text(shape) -> dict | None:
-    tx_body = shape._element.find(qn("p:txBody"))
+    return _body_text(shape._element.find(qn("p:txBody")))
+
+
+def _body_text(tx_body) -> dict | None:
     if tx_body is None:
         return None
     paragraphs = []
@@ -126,6 +129,11 @@ def shape_text(shape) -> str:
     return plain_text(_text(shape))
 
 
+def table_cell_texts(shape) -> list[list[str]]:
+    """The plain text of every cell of a table shape, row by row (merged-away cells are empty)."""
+    return [[plain_text(_body_text(tc.find(qn("a:txBody")))) for tc in tr.findall(qn("a:tc"))] for tr in shape._element.iter(qn("a:tr"))]
+
+
 def _rotation(shape) -> float:
     xfrm = shape._element.xpath("./p:spPr/a:xfrm | ./p:grpSpPr/a:xfrm | ./p:xfrm")
     rot = int(xfrm[0].get("rot", 0)) / 60000 if xfrm else 0
@@ -144,7 +152,7 @@ def _shape(shape, title_box: Box | None) -> dict:
     elif kind in ("picture", "table", "chart"):
         role = kind
     c_nv_pr = el.xpath("./*[1]/p:cNvPr")[0]
-    return {
+    item = {
         "id": shape.shape_id,
         "name": shape.name,
         "kind": kind,
@@ -158,6 +166,9 @@ def _shape(shape, title_box: Box | None) -> dict:
         "alt": c_nv_pr.get("descr", ""),
         "children": [_shape(c, title_box) for c in shape.shapes] if kind == "group" else [],
     }
+    if kind == "table":
+        item["table"] = table_cell_texts(shape)
+    return item
 
 
 def _title_box(slide) -> Box | None:
