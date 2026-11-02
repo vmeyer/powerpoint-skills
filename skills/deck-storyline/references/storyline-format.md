@@ -43,7 +43,7 @@ After the header comes `## Slides` with one entry per slide, in the intended sli
 | Shows | The visual idea in one or two sentences: the form (matrix, process, comparison, timeline, tiles, chart, table) and what it holds. Not the slide's text |
 | Sources | Where the facts in title and body come from. From a research run: source id and short name, claim ids in parentheses (`S004 Pilot survey (C011)`); otherwise the file or document ("pilot retro notes"). `—` when the slide states no facts |
 | Status | One of the four statuses below |
-| Id | The slide's stable id in the working copy (`pptx inventory` prints it as `id 257`); `—` until the slide exists |
+| Id | The slide's stable id in the working copy (`pptx inventory` prints it as `id 257`; a new slide never gets the id of a deleted one); `—` until the slide exists |
 | Notes | Optional: detail meant for the speaker notes, what was cut from the slide, open questions starting with "Open question:". "To delete" marks a cut entry whose slide still exists; the entry goes once `slide-design` has deleted the slide |
 
 `<N>` is the entry's position, which is the intended slide number. After an insert, move or cut,

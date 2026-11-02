@@ -36,6 +36,8 @@ class Context:
     # deck.json `cloned_texts` as it will be written: {slide id: {shape id: example text}}
     cloned_texts: dict = field(default_factory=dict)
     sources: dict = field(default_factory=dict)  # resolved path -> opened source deck
+    # the highest slide id the deck folder has used, deleted slides included; new slides go above it (R26)
+    max_slide_id: int = 0
 
 
 OPS: dict = {}
@@ -166,6 +168,7 @@ def apply_changeset(deck_path: Path, changeset: dict) -> dict:
         examples_path=deck["sources"].get("examples") if deck else None,
         messages=messages,
         cloned_texts=copy.deepcopy(deck.get("cloned_texts") or {}) if deck else {},
+        max_slide_id=max([(deck or {}).get("max_slide_id") or 0, *(s.slide_id for s in prs.slides)]),
     )
     _run(ctx, changeset["ops"])
     live = {s.slide_id for s in ctx.prs.slides}
@@ -195,7 +198,7 @@ def _write(ctx: Context, changeset: dict, before: bytes, touched: list[int]) -> 
         replaced = True
         if deck_dir is None:
             return None
-        return record_apply(deck_dir, changeset, _label(changeset), before, touched, new_hash, ctx.cloned_texts)
+        return record_apply(deck_dir, changeset, _label(changeset), before, touched, new_hash, ctx.cloned_texts, ctx.max_slide_id)
     except OSError as exc:
         _rollback(deck_path, deck_dir, before, saved, replaced)
         raise PptxSkillsError(f"could not write {deck_path}; nothing was changed: {exc}") from exc
@@ -236,10 +239,12 @@ def _restore_dir(folder: Path, names: set[str] | None) -> None:
 @op("add_slide")
 def _add_slide(ctx: Context, spec: dict) -> None:
     after = slides.resolve_slide(ctx.prs, spec["after"], ctx.last_slide) if "after" in spec else None
-    slide = slides.add_slide(ctx.prs, spec["layout"], after)
+    slide = slides.add_slide(ctx.prs, spec["layout"], after, ctx.max_slide_id, ctx.messages)
+    ctx.max_slide_id = max(ctx.max_slide_id, slide.slide_id)
     ctx.last_slide = slide
     ctx.touched.add(slide.slide_id)
-    ctx.cloned_texts.pop(str(slide.slide_id), None)  # a reused slide id must not inherit example texts
+    # ids are new (R26), except past the largest valid id, where one may be reused: never inherit example texts
+    ctx.cloned_texts.pop(str(slide.slide_id), None)
 
 
 @op("delete_slide")
@@ -334,7 +339,8 @@ def _clone_slide(ctx: Context, spec: dict) -> None:
     after = slides.resolve_slide(ctx.prs, spec["after"], ctx.last_slide) if "after" in spec else None
     carried = _carried_texts(ctx, src_slide, kind)
     notes: list[str] = []
-    slide = slides.clone_slide(src_prs, src_slide, ctx.prs, after, notes)
+    slide = slides.clone_slide(src_prs, src_slide, ctx.prs, after, notes, ctx.max_slide_id)
+    ctx.max_slide_id = max(ctx.max_slide_id, slide.slide_id)
     _copied(ctx, slide, kind, carried, spec["from"]["deck"], notes)
 
 

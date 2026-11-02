@@ -12,7 +12,7 @@ from .brief import build_brief, load_brief, write_brief
 from .errors import PptxSkillsError
 from .neutral import load_style_file, neutral_presentation
 from .opc import file_hash, open_presentation, save_presentation
-from .slides import delete_all_slides
+from .slides import MIN_SLIDE_ID, delete_all_slides
 
 _OWNED = ("changes", "snapshots", "render", "check", "style")
 _SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -50,6 +50,9 @@ def _validate(deck_dir: Path, deck, path: Path) -> None:
         raise PptxSkillsError(f"{path} has invalid sources; expected an object")
     if not isinstance(deck.get("cloned_texts", {}), dict):
         raise PptxSkillsError(f"{path} has invalid cloned_texts; expected an object")
+    max_id = deck.get("max_slide_id")
+    if max_id is not None and (not isinstance(max_id, int) or isinstance(max_id, bool)):
+        raise PptxSkillsError(f"{path} has an invalid max_slide_id; expected a whole number")
 
 
 def _save_deck(deck_dir: Path, deck: dict) -> None:
@@ -180,6 +183,8 @@ def init_deck(
             "last_hash": save_presentation(prs, stage / working_copy),
             "seq": 0,
             "last_touched": [],
+            # the highest slide id ever used here; new slides get higher ids (R26)
+            "max_slide_id": max([MIN_SLIDE_ID - 1, *(s.slide_id for s in prs.slides), (old or {}).get("max_slide_id") or 0]),
         }
         refresh_brief(stage, deck, notes=notes)
         _save_deck(stage, deck)
@@ -201,8 +206,12 @@ def record_apply(
     touched: list[int],
     new_hash: str,
     cloned_texts: dict | None = None,
+    max_slide_id: int | None = None,
 ) -> int:
-    """Log the change set, keep the snapshot and update deck.json; `cloned_texts` replaces the stored record."""
+    """Log the change set, keep the snapshot and update deck.json.
+
+    `cloned_texts` replaces the stored record; `max_slide_id` raises the stored highest slide id, never lowers it.
+    """
     deck_dir = Path(deck_dir)
     deck = load_deck(deck_dir)
     number = deck["seq"] + 1
@@ -219,6 +228,8 @@ def record_apply(
         last_touched=list(touched),
         last_applied=datetime.now(timezone.utc).isoformat(timespec="seconds"),
     )
+    if max_slide_id is not None:
+        deck["max_slide_id"] = max(deck.get("max_slide_id") or 0, max_slide_id)
     if cloned_texts is not None:
         deck.pop("cloned_texts", None)
         if cloned_texts:

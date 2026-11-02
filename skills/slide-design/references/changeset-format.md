@@ -54,7 +54,7 @@ Wherever an op takes a slide (`slide`, `after`):
 | Ref | Meaning |
 |---|---|
 | `3` | 1-based slide number at the time the op runs (earlier ops in the same change set count) |
-| `"id:258"` | the slide with this slide id (stable across moves; see the touched ids in the output) |
+| `"id:258"` | the slide with this slide id (stable across moves, and never reused for a new slide in the deck folder, even after a delete; see the touched ids in the output) |
 | `"$last"` | the slide created by the latest `add_slide`, `clone_slide` or `replace_slide` in this change set (an error if there is none) |
 
 `pptx inventory <deck.pptx>` lists every slide as `## Slide <number> (id <id>) — <layout>`. A hidden slide is

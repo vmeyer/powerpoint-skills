@@ -341,3 +341,89 @@ def test_deck_json_without_seq_is_exit_2_and_changes_nothing(deck_dir_from_defau
     assert main(["apply", str(deck), str(cs)]) == 2
     assert capsys.readouterr().err == "error: unexpected KeyError: 'seq'\n"
     assert file_hash(deck) == before
+
+
+# --- slide ids are never reused within a deck folder (R26) ----------------------------------------
+
+def _ids(deck):
+    return [s.slide_id for s in open_presentation(deck).slides]
+
+
+def test_delete_then_add_in_one_change_set_gets_a_new_id(deck_dir_from_default):
+    deck = deck_dir_from_default / "d.pptx"
+    apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Blank"}, {"op": "add_slide", "layout": "Blank"}]})
+    first, second = _ids(deck)
+    res = apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": f"id:{second}"}, {"op": "add_slide", "layout": "Blank"}]})
+    assert _ids(deck) == [first, second + 1] and res["touched"] == [second + 1]
+    assert load_deck(deck_dir_from_default)["max_slide_id"] == second + 1
+
+
+def test_ids_stay_unique_across_applies(deck_dir_from_default):
+    deck = deck_dir_from_default / "d.pptx"
+    apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Blank"}, {"op": "add_slide", "layout": "Blank"}]})
+    first, second = _ids(deck)
+    apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": f"id:{second}"}]})
+    assert load_deck(deck_dir_from_default)["max_slide_id"] == second
+    apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Blank"}]})
+    assert _ids(deck) == [first, second + 1]
+
+
+def test_clones_from_self_and_examples_get_new_ids(deck_dir):
+    deck = deck_dir / "d.pptx"
+    apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Title Only"}, {"op": "add_slide", "layout": "Blank"}]})
+    first, second = _ids(deck)
+    apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 2},
+                                   {"op": "clone_slide", "from": {"deck": "self", "slide": 1}}]})
+    assert _ids(deck) == [first, second + 1]
+    apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 2},
+                                   {"op": "clone_slide", "from": {"deck": "examples", "slide": 2}}]})
+    assert _ids(deck) == [first, second + 2]
+    assert set(load_deck(deck_dir)["cloned_texts"]) == {str(second + 2)}
+
+
+def test_replace_keeps_the_slide_id(deck_dir, other_deck):
+    deck = deck_dir / "d.pptx"
+    apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Title Only"}, {"op": "add_slide", "layout": "Blank"}]})
+    ids = _ids(deck)
+    apply_changeset(deck, {"ops": [{"op": "replace_slide", "slide": 1, "from": {"deck": str(other_deck), "slide": 1}}]})
+    assert _ids(deck) == ids and load_deck(deck_dir)["max_slide_id"] == ids[1]
+
+
+def test_init_records_the_highest_slide_id(tmp_path, deck_with_two_slides, potx_file):
+    from pptx_skills.deckdir import init_deck
+
+    kept = init_deck(tmp_path / "k", deck_with_two_slides, keep_slides=True)
+    assert kept["max_slide_id"] == max(_ids(tmp_path / "k/k.pptx")) == 257
+    assert init_deck(tmp_path / "e", potx_file)["max_slide_id"] == 255
+    meta = json.loads((tmp_path / "k/deck.json").read_text())
+    meta["max_slide_id"] = 900
+    (tmp_path / "k/deck.json").write_text(json.dumps(meta))
+    assert init_deck(tmp_path / "k", potx_file, mode="replace")["max_slide_id"] == 900  # the old value is larger
+
+
+def test_deck_json_without_max_slide_id_still_works(deck_dir_from_default):
+    deck = deck_dir_from_default / "d.pptx"
+    apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Blank"}, {"op": "add_slide", "layout": "Blank"}]})
+    meta = json.loads((deck_dir_from_default / "deck.json").read_text())
+    del meta["max_slide_id"]
+    (deck_dir_from_default / "deck.json").write_text(json.dumps(meta))
+    first, second = _ids(deck)
+    apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Blank"}]})
+    assert _ids(deck) == [first, second, second + 1]
+    assert load_deck(deck_dir_from_default)["max_slide_id"] == second + 1
+    meta["max_slide_id"] = "257"
+    (deck_dir_from_default / "deck.json").write_text(json.dumps(meta))
+    with pytest.raises(PptxSkillsError, match="max_slide_id"):
+        load_deck(deck_dir_from_default)
+
+
+def test_allocate_slide_id_falls_back_below_the_limit(deck_with_two_slides):
+    prs = open_presentation(deck_with_two_slides)
+    id_list = prs.slides._sldIdLst
+    id_list[1].id = 2147483647
+    prs.slides.add_slide(prs.slide_layouts[6])
+    assert slides.allocate_slide_id(prs, id_list[-1], 300) is not None
+    assert [s.id for s in id_list] == [256, 2147483647, 257]
+    assert slides.allocate_slide_id(prs, id_list[-1], 600) is not None and id_list[-1].id == 257
+    id_list[1].id = 400
+    assert slides.allocate_slide_id(prs, id_list[-1], 600) is None and id_list[-1].id == 601

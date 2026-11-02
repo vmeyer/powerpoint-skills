@@ -22,6 +22,7 @@ FOOTER_TYPES = (PP_PLACEHOLDER.DATE, PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.SLIDE
 _HYPERLINKS = (qn("a:hlinkClick"), qn("a:hlinkHover"), qn("a:hlinkMouseOver"))
 # elements whose only job is to point at a slide: hyperlinks, and `p:sld` in outline views and custom shows
 _SLIDE_POINTERS = (*_HYPERLINKS, qn("p:sld"))
+MIN_SLIDE_ID, MAX_SLIDE_ID = 256, 2147483647
 _ZOOMS = {
     f"http://schemas.microsoft.com/office/powerpoint/2016/{kind.replace(' ', '').lower()}": kind
     for kind in ("Slide Zoom", "Section Zoom", "Summary Zoom")
@@ -111,6 +112,21 @@ def refresh_slide_numbers(prs) -> None:
                 text.text = str(number)
 
 
+def allocate_slide_id(prs, sld_id_el, floor: int = 0) -> str | None:
+    """Give the new slide `sld_id_el` the id max(floor, every other live id) + 1, so no id is ever reused (R26).
+
+    `floor` is the highest id the deck folder has used, deleted slides included. Past the largest valid id the
+    lowest free id from 256 up is taken instead; a note for the user is returned then.
+    """
+    others = {s.id for s in prs.slides._sldIdLst if s.rId != sld_id_el.rId}
+    wanted = max(MIN_SLIDE_ID - 1, floor, *others) + 1
+    if wanted <= MAX_SLIDE_ID:
+        sld_id_el.id = wanted
+        return None
+    sld_id_el.id = next(i for i in range(MIN_SLIDE_ID, MAX_SLIDE_ID + 1) if i not in others)
+    return f"slide ids reached their maximum; the new slide got id {sld_id_el.id}, which a deleted slide may have had"
+
+
 def _renumber_slide_parts(prs) -> None:
     """Name the slide parts slide1.xml … slideN.xml in slide order again, after a slide part was removed.
 
@@ -154,14 +170,20 @@ def copy_footer_placeholders(slide, layout) -> None:
         slide.placeholders[idx]._element.append(body)
 
 
-def add_slide(prs, layout_name: str, after=None):
-    """Add a slide with the named layout after `after`; at the end when `after` is None."""
+def add_slide(prs, layout_name: str, after=None, floor: int = 0, notes: list[str] | None = None):
+    """Add a slide with the named layout after `after`; at the end when `after` is None.
+
+    Its id is above `floor` (see `allocate_slide_id`); a note about the id is appended to `notes`.
+    """
     layout = layout_named(prs, layout_name)
     id_list = prs.slides._sldIdLst
     index = len(id_list)
     if after is not None:
         index = [s.id for s in id_list].index(after.slide_id) + 1
     slide = prs.slides.add_slide(layout)
+    note = allocate_slide_id(prs, id_list[-1], floor)
+    if note and notes is not None:
+        notes.append(note)
     copy_footer_placeholders(slide, layout)
     _place(prs, id_list[-1], index)
     return slide
@@ -540,16 +562,20 @@ class _SlideCopy:
             target.text = frame.text
 
 
-def clone_slide(src_prs, src_slide, dst_prs, after=None, notes: list[str] | None = None):
+def clone_slide(src_prs, src_slide, dst_prs, after=None, notes: list[str] | None = None, floor: int = 0):
     """Copy `src_slide` of `src_prs` into `dst_prs` after `after` (at the end when None); return the copy.
 
     The copy uses the destination layout of the same name and keeps shapes, background, pictures, charts
-    with their data, external links and the notes text. It joins the section of the slide before it.
-    Messages for the user (dropped tags or links) are appended to `notes`. Raises before `dst_prs` changes
-    when the layout is missing or the slide uses parts that cannot be copied. `src_prs` may be `dst_prs`.
+    with their data, external links and the notes text. It joins the section of the slide before it and gets
+    an id above `floor` (see `allocate_slide_id`). Messages for the user (dropped tags or links) are appended
+    to `notes`. Raises before `dst_prs` changes when the layout is missing or the slide uses parts that cannot
+    be copied. `src_prs` may be `dst_prs`.
     """
     slide = _SlideCopy(src_prs, src_slide, dst_prs, notes).make()
     id_list = dst_prs.slides._sldIdLst
+    note = allocate_slide_id(dst_prs, id_list[-1], floor)
+    if note and notes is not None:
+        notes.append(note)
     index = len(id_list) - 1
     if after is not None:
         index = [s.id for s in id_list].index(after.slide_id) + 1

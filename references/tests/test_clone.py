@@ -390,7 +390,7 @@ def test_cloned_texts_follow_deleted_and_reused_slide_ids(deck_dir):
     apply(deck, [{"op": "clone_slide", "from": {"deck": "examples", "slide": 2}}])
     old_id = open_presentation(deck).slides[0].slide_id
     apply(deck, [{"op": "delete_slide", "slide": 1}, {"op": "add_slide", "layout": "Title Only"}])
-    assert open_presentation(deck).slides[0].slide_id == old_id  # python-pptx reuses the freed id
+    assert open_presentation(deck).slides[0].slide_id == old_id + 1  # the freed id is never reused (R26)
     assert "cloned_texts" not in load_deck(deck_dir)
     apply(deck, [{"op": "clone_slide", "from": {"deck": "examples", "slide": 2}}])
     apply(deck, [{"op": "delete_slide", "slide": 2}])
