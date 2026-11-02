@@ -59,11 +59,6 @@ def test_changed_externally(tmp_path, potx_file):
 def test_usage_errors(tmp_path, potx_file):
     with pytest.raises(PptxSkillsError, match="--from"):
         init_deck(tmp_path / "n", None)
-    style = tmp_path / "s.json"
-    style.write_text("{}")
-    with pytest.raises(PptxSkillsError, match="not supported yet"):
-        init_deck(tmp_path / "n", None, style_file=style)
-    assert not (tmp_path / "n").exists()
 
 
 def test_style_file_rules_and_invalid_json(tmp_path, potx_file):

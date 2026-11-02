@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "pptx style file",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "colors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dk1": {"$ref": "#/$defs/hex"},
+        "lt1": {"$ref": "#/$defs/hex"},
+        "dk2": {"$ref": "#/$defs/hex"},
+        "lt2": {"$ref": "#/$defs/hex"},
+        "accent1": {"$ref": "#/$defs/hex"},
+        "accent2": {"$ref": "#/$defs/hex"},
+        "accent3": {"$ref": "#/$defs/hex"},
+        "accent4": {"$ref": "#/$defs/hex"},
+        "accent5": {"$ref": "#/$defs/hex"},
+        "accent6": {"$ref": "#/$defs/hex"},
+        "hlink": {"$ref": "#/$defs/hex"},
+        "folHlink": {"$ref": "#/$defs/hex"}
+      }
+    },
+    "fonts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "major": {"type": "string", "minLength": 1},
+        "minor": {"type": "string", "minLength": 1}
+      }
+    },
+    "rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min_size_pt": {"$ref": "#/$defs/positive"},
+        "min_size_small_pt": {"$ref": "#/$defs/positive"},
+        "max_lines": {"$ref": "#/$defs/positive"},
+        "max_title_lines": {"$ref": "#/$defs/positive"},
+        "max_bullets": {"$ref": "#/$defs/positive"},
+        "near_align_cm": {"$ref": "#/$defs/positive"},
+        "snap_cm": {"$ref": "#/$defs/positive"},
+        "title_min_words": {"$ref": "#/$defs/positive"}
+      }
+    }
+  },
+  "$defs": {
+    "hex": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+    "positive": {"type": "number", "exclusiveMinimum": 0}
+  }
+}

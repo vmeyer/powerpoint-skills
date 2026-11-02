@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pptx_skills.changeset import _schema, validate_changeset
 from pptx_skills.cli import main
+from pptx_skills.neutral import validate_style
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILLS = sorted((ROOT / "skills").glob("*/SKILL.md"))
@@ -88,6 +89,9 @@ def test_json_examples_validate():
     checked = 0
     for md in DOCS:
         for example in _json_examples(md.read_text(encoding="utf-8")):
+            if "op" not in example and "ops" not in example:  # a style file, not a change set
+                validate_style(example)
+                continue
             changeset = example if "ops" in example else {"ops": [example]}
             ops = [o for o in changeset["ops"] if o["op"] in known]  # ops still to come are marked as such in the text
             validate_changeset({**changeset, "ops": ops} if ops else {"ops": [{"op": "add_slide", "layout": "x"}]})

@@ -50,6 +50,8 @@ Every deck lives in `decks/<slug>/` in the user's project, the slug in kebab-cas
 | a master or template (`.potx`, or a `.pptx` used as one) | `pptx init decks/<slug> --from <master.potx>` |
 | … plus a deck whose slides show the style in use | add `--examples <examples.pptx>` |
 | an existing deck to continue | `pptx init decks/<slug> --from <deck.pptx> --keep-slides` |
+| no master at all | `pptx init decks/<slug> --style-file <style.json>`: builds the deck on a neutral 16:9 template; the optional style file sets colors and fonts ([style-file.md](references/style-file.md)) |
+| any of the above, with their own check thresholds | add `--style-file <style.json>` with `rules` only |
 | a `decks/<slug>/` folder already | no init; work in it (`pptx style decks/<slug>` refreshes the brief) |
 
 `init` copies the source to `decks/<slug>/<slug>.pptx`, the **working copy**; the user's own file

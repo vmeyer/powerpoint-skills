@@ -10,6 +10,7 @@ from pathlib import Path
 from . import cli
 from .brief import build_brief, load_brief, write_brief
 from .errors import PptxSkillsError
+from .neutral import load_style_file, neutral_presentation
 from .opc import file_hash, open_presentation, save_presentation
 from .slides import delete_all_slides
 
@@ -64,17 +65,7 @@ def _abs(path: Path | None) -> str | None:
 
 
 def _style_rules(style_file: str | None) -> dict | None:
-    if not style_file:
-        return None
-    path = Path(style_file)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise PptxSkillsError(f"cannot read style file {path}: {exc}") from exc
-    except ValueError as exc:
-        raise PptxSkillsError(f"style file {path} is not valid JSON: {exc}") from exc
-    rules = data.get("rules") if isinstance(data, dict) else None
-    return rules if isinstance(rules, dict) else None
+    return load_style_file(Path(style_file)).get("rules") if style_file else None
 
 
 def refresh_brief(deck_dir: Path, deck: dict, force: bool = False, notes: list[str] | None = None) -> dict:
@@ -132,8 +123,6 @@ def init_deck(
         return deck
     if source is None and style_file is None:
         raise PptxSkillsError("init needs --from <master.potx|pptx> or --style-file <style.json>")
-    if source is None:
-        raise PptxSkillsError("decks from a style file alone are not supported yet")
 
     slug = deck_dir.name
     working_copy = f"{slug}.pptx"
@@ -141,10 +130,11 @@ def init_deck(
         clash = [n for n in (working_copy, *_OWNED) if (deck_dir / n).exists()]
         if clash:
             raise PptxSkillsError(f"{deck_dir} already contains {', '.join(clash)}; use --replace to start over")
-    prs = open_presentation(source)  # validate every input before touching the folder
+    # validate every input before touching the folder
+    style = load_style_file(style_file) if style_file is not None else None
+    prs = open_presentation(source) if source is not None else neutral_presentation(style)
     if examples is not None:
         open_presentation(examples)
-    _style_rules(_abs(style_file))
     if not keep_slides:
         delete_all_slides(prs)
     deck_dir.parent.mkdir(parents=True, exist_ok=True)

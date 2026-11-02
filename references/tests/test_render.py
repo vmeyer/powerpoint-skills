@@ -257,3 +257,11 @@ def test_layout_sheet_of_a_deck_whose_zoom_follows_its_target(fake_tools, make_d
     assert sheet.is_file()
     pages = [cmd for cmd in fake_tools if not cmd[0].endswith("soffice")]
     assert len(pages) == len(open_presentation(deck).slide_layouts)  # one page per layout, no deck slide left
+
+
+@needs_tools
+def test_neutral_deck_renders_layout_sheet(tmp_path):
+    style = tmp_path / "style.json"
+    style.write_text("{}")
+    init_deck(tmp_path / "n", None, style_file=style)
+    assert (tmp_path / "n/style/layouts.png").stat().st_size > 0
