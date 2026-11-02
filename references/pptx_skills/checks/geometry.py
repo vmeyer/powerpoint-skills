@@ -1,6 +1,6 @@
 """Geometry rules: shapes stay on the slide, inside the content area, apart and aligned."""
 
-from ..geometry import Box, visual_box
+from ..geometry import Box
 from ..units import EMU_PER_CM
 from . import rule
 
@@ -17,12 +17,13 @@ MIN_LAYOUT_SIDE_CM = 0.8
 
 
 def _seen(slide) -> list[dict]:
-    """The inventory tree with every `box` replaced by the rotation-aware bounds (R21)."""
+    """The inventory tree with every `box` replaced by what the viewer sees: rotation-aware bounds (R21) at the
+    grown height of a text box that grows to fit its text."""
     shapes = {item["id"]: shape for item, shape in slide.shapes()}
 
     def convert(items):
         return [
-            {**item, "box": visual_box(shapes[item["id"]]).as_list() if item["id"] in shapes else item["box"], "children": convert(item["children"])}
+            {**item, "box": slide.seen_box(shapes[item["id"]]).as_list() if item["id"] in shapes else item["box"], "children": convert(item["children"])}
             for item in items
         ]
 
@@ -153,5 +154,5 @@ def uneven_gaps(ctx, slide):
                 continue
             names = ", ".join(f"“{i['name']}”" for i in row)
             listing = ", ".join(f"{g:g}" for g in gaps)
-            out.append(ctx.finding(slide, row[0], f"the gaps in the row {names} are uneven ({listing} cm)", "space the shapes evenly, for example with `pptx distribute`"))
+            out.append(ctx.finding(slide, row[0], f"the gaps in the row {names} are uneven ({listing} cm)", "space the shapes evenly: take their boxes from `pptx grid` with one gutter"))
     return out

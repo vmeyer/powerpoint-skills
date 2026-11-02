@@ -239,3 +239,11 @@ def test_hidden_slides_are_marked(deck_with_two_slides, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "## Slide 2 (id" in out and "hidden" in out.split("## Slide 2")[1].splitlines()[0]
     assert "hidden" not in out.split("## Slide 2")[0]
+
+
+def test_kicker_edges_compare_with_a_tolerance():
+    title = Box(1, 0.3, 20, 2)
+    assert placeholder_role(PH.BODY, Box(1, 0.1, 10, 0.2), title) == "kicker"  # bottom 0.1 + 0.2 is 0.30000000000000004
+    assert placeholder_role(PH.BODY, Box(1, 0, 10, 0.1 + 0.2 + 1.2), Box(1, 1.5, 20, 2)) == "kicker"  # 1.5000000000000002 high
+    assert placeholder_role(PH.BODY, Box(1, 0.1, 10, 0.25), title) == "body"  # 0.05 cm into the title
+    assert placeholder_role(PH.BODY, Box(1, 0, 10, 1.6), Box(1, 2, 20, 2)) == "body"  # too high for a kicker

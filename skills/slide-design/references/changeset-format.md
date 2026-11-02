@@ -79,7 +79,8 @@ Colors are theme roles, so decks follow the master when the theme changes:
 `dk1 lt1 dk2 lt2 tx1 tx2 bg1 bg2 accent1`..`accent6 hlink folHlink`, optionally with a brightness shift
 `+NN` (lighter) or `-NN` (darker) in percent, for example `accent1`, `accent1+40`, `tx1-25`.
 `none` means no fill, no line or (for a run) no explicit color. A literal `#RRGGBB` is only accepted by
-`add_shape`, `add_line` and `update_shape` when the op sets `"allow_rgb": true`.
+`add_shape`, `add_line`, `update_shape`, `add_table` and `set_table` when the op sets `"allow_rgb": true`; `set_text`
+never takes one.
 
 ## Units
 
@@ -178,8 +179,10 @@ group is found too). Give exactly one of `text` or `paragraphs`. Formatting the 
 first run's properties and the first paragraph's properties of the existing text are the template for everything
 written. Colors are theme roles (`accent1`, `accent2+40`); raw `#RRGGBB` is rejected.
 
-Shorthand: `\n` separates paragraphs, `**…**` marks bold runs.
-In the shorthand, bold is set by the markers alone: text outside `**…**` is written non-bold even when the existing run was bold.
+Shorthand: `\n` separates paragraphs, `**…**` marks bold runs. With markers, the marked runs are bold and all
+other runs explicitly not bold. Without markers no weight is written, and a bold copied from the existing first run
+is dropped, so the text takes the weight of the layout or master (a title stays bold where the master makes titles
+bold). `font.bold` sets the weight of every run that has no marker.
 
 Paragraph properties: a paragraph that sets neither `level` nor `bullet` keeps the first existing paragraph's full
 properties (level, bullet, margins, alignment). `level` replaces the level and drops the template's margins so the
@@ -256,8 +259,9 @@ An added shape shows only what the op sets: no fill, no line, no shadow. Its tex
 text style (often 18 pt) and, in every shape but `textbox`, is centered horizontally and vertically. So set
 `fill` and `line`, and give every shape with text `font` (size and color), `align`, `anchor` and `insets`.
 
-A `textbox` grows with its text, so `check` cannot report its overflow. For a block of text with a fixed size,
-use a `rect` with `"fill": "none", "line": "none"`.
+A `textbox` grows with its text, so it never overflows: `check` warns `grows-to-fit` when the text needs more
+height than its box and checks overlaps and the slide edge at the grown height. For a block of text with a fixed
+size, use a `rect` with `"fill": "none", "line": "none"`; `check` reports its overflow as an error.
 
 Matrix cell with a bold label followed by a plain line:
 
@@ -383,9 +387,10 @@ Detail that does not belong on the slide goes here.
 ### add_table, set_table
 
 `add_table` adds a native table; `box` is `[x, y, w, h]` in cm (snapped like shapes), `rows` the cell texts, all
-rows with the same number of columns. Cell text uses the `text` shorthand (`\n` = paragraph, `**bold**`).
-Text without `**` writes no weight, so header cells keep the bold of the table style; text with `**` is
-bold exactly where marked, and `font.bold: false` unbolds a whole cell.
+rows with the same number of columns. Cell text uses the `text` shorthand of `set_text` (`\n` = paragraph,
+`**bold**`): text without `**` writes no weight (a bold copied from the cell's existing run is dropped), so cells
+take the weight of the table style, such as a bold header row; text with `**` is bold exactly where marked, and
+`font.bold: false` unbolds a whole cell.
 
 | Field | Meaning |
 |---|---|

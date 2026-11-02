@@ -8,9 +8,9 @@ from ..fonts import _Inheritance, _layout_placeholder, effective_run_style, meas
 from ..geometry import absolute_box
 from ..inventory import plain_text, table_cell_texts
 from ..units import EMU_PER_CM
-from . import rule
+from . import TEXT_FIT_TOLERANCE_CM, rule
 
-OVERFLOW_TOLERANCE_CM = 0.05
+OVERFLOW_TOLERANCE_CM = TEXT_FIT_TOLERANCE_CM
 _SMALL_ROLES = ("footer", "number", "date")
 _LEFTOVER = re.compile(r"\bLorem\b|\bTODO\b|\bXXX\b")
 _CHAIN_SEPARATOR = re.compile(r"[·•|]|\s/\s")
@@ -45,7 +45,7 @@ def overflow(ctx, slide):
     for item, shape in _text_shapes(slide):
         m = measure_paragraphs(shape, slide.pptx)
         if m.autofit == "shape":
-            continue
+            continue  # it grows instead; see grows-to-fit
         scale = _scale(m)
         reduction = m.line_spacing_reduction if m.autofit == "shrink" else 0.0
         height = m.height_cm * scale * (1 - reduction)
@@ -57,6 +57,17 @@ def overflow(ctx, slide):
         room = box.w - (insets["lIns"] + insets["rIns"]) / EMU_PER_CM
         if m.widest_word_cm * scale > room + 0.01:
             out.append(ctx.finding(slide, item, f"a word is {m.widest_word_cm * scale:.2f} cm wide but the box leaves {room:.2f} cm", "widen the box or use a shorter word"))
+    return out
+
+
+@rule("grows-to-fit", "text", "warning")
+def grows_to_fit(ctx, slide):
+    """A text box that grows to fit its text cannot overflow, but it takes more room than its box shows."""
+    out = []
+    for item, shape in _text_shapes(slide):
+        height = slide.grown_height(shape)
+        if height is not None:
+            out.append(ctx.finding(slide, item, f"the text box grows to {height:.2f} cm to fit its text; its box is {absolute_box(shape).h:.2f} cm high", "give the box that height and keep the space below it free, or shorten the text"))
     return out
 
 

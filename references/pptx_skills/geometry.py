@@ -81,12 +81,18 @@ def _rotate(points, centre, degrees):
     return [(cx + (x - cx) * cos - (y - cy) * sin, cy + (x - cx) * sin + (y - cy) * cos) for x, y in points]
 
 
-def visual_box(shape) -> Box:
+def visual_box(shape, height_cm: float | None = None) -> Box:
     """Axis-aligned bounds in cm of what the viewer sees: the frame rotated about its centre,
-    then every enclosing rotated group applied the same way (90°/270° swap width and height)."""
+    then every enclosing rotated group applied the same way (90°/270° swap width and height).
+
+    `height_cm` is the height of a shape that grows to fit its text, when larger than its stored height;
+    the frame then grows downwards before it is rotated.
+    """
     from pptx.shapes.group import GroupShape
 
     box = absolute_box(shape)
+    if height_cm is not None and height_cm > box.h:
+        box = Box(box.x, box.y, box.w, height_cm)
     points = [(box.x, box.y), (box.right, box.y), (box.right, box.bottom), (box.x, box.bottom)]
     degrees = _rotation_deg(shape._element)
     if degrees % 360:

@@ -17,8 +17,11 @@ def test_parse(text, ref):
 
 def test_none_and_errors():
     assert parse_color("none") is None
-    with pytest.raises(PptxSkillsError, match="allow_rgb"):
+    with pytest.raises(PptxSkillsError, match="not allowed; use a theme role") as exc:
         parse_color("#FF0000")
+    assert "allow_rgb" not in str(exc.value)
+    with pytest.raises(PptxSkillsError, match='or set "allow_rgb": true'):
+        parse_color("#FF0000", option='"allow_rgb": true')
     with pytest.raises(PptxSkillsError, match="unknown color"):
         parse_color("accent9")
     assert parse_color("#ff0000", allow_rgb=True) == ColorRef(None, "FF0000", 0)
@@ -56,3 +59,29 @@ def test_read_pattern_fill_and_empty():
     assert read_color(el.find(qn("a:bgClr"))) == "#FFFFFF"
     assert read_color(el) is None
     assert read_color(parse_xml(f'<a:solidFill {nsdecls("a")}/>')) is None
+
+
+def _fill(inner):
+    return parse_xml(f'<a:solidFill {nsdecls("a")}>{inner}</a:solidFill>')
+
+
+@pytest.mark.parametrize("inner,expected", [
+    ('<a:sysClr val="windowText"/>', "#000000"),
+    ('<a:sysClr val="window"/>', "#FFFFFF"),
+    ('<a:sysClr val="btnFace"/>', None),
+    ('<a:sysClr val="window" lastClr="f0f0f0"/>', "#F0F0F0"),
+    ("<a:srgbClr/>", None),
+    ("<a:schemeClr/>", None),
+    ('<a:schemeClr val="accent1"><a:lumOff/></a:schemeClr>', "accent1"),
+])
+def test_read_valid_colors_without_optional_attributes(inner, expected):
+    assert read_color(_fill(inner)) == expected
+
+
+@pytest.mark.parametrize("inner,expected", [
+    ('<a:schemeClr val="accent1"><a:lumMod val="99600"/><a:lumOff val="400"/></a:schemeClr>', "accent1"),
+    ('<a:schemeClr val="accent1"><a:lumMod val="99600"/></a:schemeClr>', "accent1"),
+    ('<a:schemeClr val="accent1"><a:lumMod val="40000"/><a:lumOff val="60000"/></a:schemeClr>', "accent1+60"),
+])
+def test_read_never_writes_a_zero_brightness(inner, expected):
+    assert read_color(_fill(inner)) == expected

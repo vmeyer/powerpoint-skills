@@ -8,7 +8,7 @@ from pptx.oxml.ns import qn
 from pptx.util import Pt
 
 from .changeset import Context, op, resolve_shape
-from .colors import apply_color, parse_color
+from .colors import RGB_OPTION, apply_color, parse_color
 from .errors import PptxSkillsError
 from .slides import resolve_slide
 
@@ -17,17 +17,17 @@ _AFTER_BULLET = ("tabLst", "defRPr", "extLst")
 
 
 def _shorthand(text: str, font: dict) -> list[dict]:
-    """`\\n` separates paragraphs; bold is fully set by the `**` pairs (unless `font.bold` is given)."""
-    plain = {} if "bold" in font else {"b": False}
-    paragraphs = []
-    for line in text.split("\n"):
-        runs = [
-            {"t": part, "b": True} if i % 2 else {"t": part, **plain}
-            for i, part in enumerate(line.split("**"))
-            if part
-        ]
-        paragraphs.append({"runs": runs})
-    return paragraphs
+    """The `text` shorthand as paragraphs: `\\n` separates paragraphs, `**…**` marks bold runs (R13′).
+
+    With markers every weight is written: marked runs bold, the others not (or `font.bold`). Without markers
+    no weight is written and a bold copied from the existing first run is dropped (`"b": None`), so the weight
+    comes from the layout or master, unless `font.bold` sets it. Shared by text, shape and table ops.
+    """
+    plain = False if "**" in text and "bold" not in font else None
+    return [
+        {"runs": [{"t": part, "b": True if i % 2 else plain} for i, part in enumerate(line.split("**")) if part]}
+        for line in text.split("\n")
+    ]
 
 
 def _drop_bullets(ppr) -> None:
@@ -64,19 +64,25 @@ def _style_paragraph(p_el, spec: dict) -> None:
             ppr.attrib.pop("indent", None)
 
 
-def _format(run, spec: dict, font: dict, allow_rgb: bool = False) -> None:
-    """Apply explicit formatting; the run keeps whatever else it inherited from the template."""
-    merged = {**font, **{k: v for k, v in spec.items() if k in ("b", "i", "size", "color")}}
-    if "bold" in font and "b" not in spec:
-        merged["b"] = font["bold"]
-    if "b" in merged:
-        run.font.bold = bool(merged["b"])
+def _format(run, spec: dict, font: dict, allow_rgb: bool | None = None) -> None:
+    """Apply explicit formatting; the run keeps whatever else it inherited from the template.
+
+    A run's own `b` wins over `font.bold`; `"b": None` (the shorthand without markers) removes the template's
+    weight unless `font.bold` is given. `allow_rgb` None means the op has no allow_rgb option.
+    """
+    if spec.get("b") is not None:
+        run.font.bold = bool(spec["b"])
+    elif "bold" in font:
+        run.font.bold = bool(font["bold"])
+    elif "b" in spec:
+        run.font.bold = None  # inherit the weight from the layout or master
+    merged = {**font, **{k: v for k, v in spec.items() if k in ("i", "size", "color")}}
     if "i" in merged:
         run.font.italic = bool(merged["i"])
     if "size" in merged:
         run.font.size = Pt(merged["size"])
     if "color" in merged:
-        ref = parse_color(str(merged["color"]), allow_rgb)
+        ref = parse_color(str(merged["color"]), bool(allow_rgb), RGB_OPTION if allow_rgb is not None else None)
         if ref is None:
             fill = run._r.get_or_add_rPr().find(qn("a:solidFill"))
             if fill is not None:
@@ -89,13 +95,13 @@ def _is_break(spec: dict) -> bool:
     return bool(spec.get("br"))
 
 
-def write_paragraphs(text_frame, paragraphs: list[dict], font: dict | None = None, allow_rgb: bool = False) -> None:
+def write_paragraphs(text_frame, paragraphs: list[dict], font: dict | None = None, allow_rgb: bool | None = None) -> None:
     """Replace the text of `text_frame`.
 
     `paragraphs` is `[{"level"?, "bullet"?, "runs": [{"t", "b"?, "i"?, "color"?, "size"?} | {"br": true}]}]`.
     The first paragraph's properties and first run's properties are the template for everything written, so
     formatting the caller does not specify survives. `font` (size, color, bold) applies to every run.
-    Raw `#RRGGBB` colors are rejected unless `allow_rgb`.
+    Raw `#RRGGBB` colors are rejected unless `allow_rgb`; None means the op offers no allow_rgb option.
     """
     font = font or {}
     body = text_frame._txBody

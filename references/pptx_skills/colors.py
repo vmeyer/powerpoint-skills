@@ -35,8 +35,15 @@ class ColorRef:
     brightness: int = 0
 
 
-def parse_color(text: str, allow_rgb: bool = False) -> ColorRef | None:
-    """Parse ``accent1``, ``accent1+60``, ``dk2-25``, ``#RRGGBB`` (if allowed) or ``none``."""
+RGB_OPTION = '"allow_rgb": true'
+
+
+def parse_color(text: str, allow_rgb: bool = False, option: str | None = None) -> ColorRef | None:
+    """Parse ``accent1``, ``accent1+60``, ``dk2-25``, ``#RRGGBB`` (if allowed) or ``none``.
+
+    `option` names the switch that would allow a raw color (``RGB_OPTION``) where the caller offers one; the
+    error mentions it only then.
+    """
     text = text.strip()
     if text == "none":
         return None
@@ -45,9 +52,8 @@ def parse_color(text: str, allow_rgb: bool = False) -> ColorRef | None:
         if not match:
             raise PptxSkillsError(f"unknown color {text!r}")
         if not allow_rgb:
-            raise PptxSkillsError(
-                f"raw color {text!r} is not allowed; use a theme role or set allow_rgb"
-            )
+            hint = f", or set {option}" if option else ""
+            raise PptxSkillsError(f"raw color {text!r} is not allowed; use a theme role such as accent1 or tx1-25{hint}")
         return ColorRef(None, match.group(1).upper(), 0)
     match = _THEME_PATTERN.match(text)
     if not match or (match.group(3) is not None and not 1 <= int(match.group(3)) <= 99):
@@ -72,26 +78,39 @@ def apply_color(color_format: ColorFormat, ref: ColorRef) -> None:
     color_format.brightness = ref.brightness / 100
 
 
+_SYSTEM_COLORS = {"windowText": "#000000", "window": "#FFFFFF"}  # a:sysClr without a cached lastClr
+
+
 def _val(el, name: str) -> int | None:
     child = el.find(qn(f"a:{name}"))
-    return int(child.get("val")) if child is not None else None
+    try:
+        return int(child.get("val")) if child is not None else None
+    except (TypeError, ValueError):  # no val, or not a whole number
+        return None
 
 
 def read_color(fill_el) -> str | None:
-    """Read the color held by a fill-like element (``a:solidFill``, ``a:fgClr``, ...)."""
+    """Read the color held by a fill-like element (``a:solidFill``, ``a:fgClr``, ...); None when there is none.
+
+    A brightness that rounds to 0 % is left out (``accent1``, never ``accent1+0``).
+    """
     scheme = fill_el.find(qn("a:schemeClr"))
     if scheme is not None:
-        text = scheme.get("val")
+        role = scheme.get("val")
+        if not role:
+            return None
         lum_off, lum_mod = _val(scheme, "lumOff"), _val(scheme, "lumMod")
+        shift = 0
         if lum_off is not None:
-            return f"{text}+{round(lum_off / 1000)}"
-        if lum_mod is not None and lum_mod < 100000:
-            return f"{text}-{round(100 - lum_mod / 1000)}"
-        return text
+            shift = round(lum_off / 1000)
+        elif lum_mod is not None and lum_mod < 100000:
+            shift = -round(100 - lum_mod / 1000)
+        return f"{role}{shift:+d}" if shift else role
     srgb = fill_el.find(qn("a:srgbClr"))
     if srgb is not None:
-        return f"#{srgb.get('val').upper()}"
+        return f"#{srgb.get('val').upper()}" if srgb.get("val") else None
     sys_clr = fill_el.find(qn("a:sysClr"))
     if sys_clr is not None:
-        return f"#{sys_clr.get('lastClr').upper()}"
+        last = sys_clr.get("lastClr")
+        return f"#{last.upper()}" if last else _SYSTEM_COLORS.get(sys_clr.get("val"))
     return None

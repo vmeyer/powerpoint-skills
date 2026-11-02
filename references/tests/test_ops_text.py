@@ -210,3 +210,58 @@ def test_shorthand_bold_is_set_by_markers_only(hand_formatted_deck):
     apply(hand_formatted_deck, [{"op": "set_text", "slide": 1, "target": {"name": "box"}, "text": "**Label** rest"}])
     runs = resolve_shape(slide1(hand_formatted_deck), {"name": "box"}).text_frame.paragraphs[0].runs
     assert [r.text for r in runs] == ["Label", " rest"] and runs[0].font.bold is True and runs[1].font.bold is False
+
+
+@pytest.fixture
+def bold_title_deck(make_deck):
+    """A master whose title style is bold, and one "Title Only" slide."""
+
+    def build(prs):
+        title_style = prs.slide_master._element.find(qn("p:txStyles")).find(qn("p:titleStyle"))
+        title_style.find(qn("a:lvl1pPr")).find(qn("a:defRPr")).set("b", "1")
+        prs.slides.add_slide(layout_named(prs, "Title Only"))
+
+    return make_deck(build, name="bold-title.pptx")
+
+
+def _title_weights(deck):
+    return [r._r.find(qn("a:rPr")).get("b") for r in slide1(deck).shapes.title.text_frame.paragraphs[0].runs]
+
+
+def test_shorthand_without_markers_inherits_the_master_weight(bold_title_deck):
+    apply(bold_title_deck, [{"op": "set_text", "slide": 1, "target": {"role": "title"}, "text": "Three quick wins come first"}])
+    assert _title_weights(bold_title_deck) == [None]  # the master's bold title style applies
+
+
+def test_shorthand_with_markers_writes_every_weight(bold_title_deck):
+    apply(bold_title_deck, [{"op": "set_text", "slide": 1, "target": {"role": "title"}, "text": "**Three wins** come first"}])
+    assert _title_weights(bold_title_deck) == ["1", "0"]
+    apply(bold_title_deck, [{"op": "set_text", "slide": 1, "target": {"role": "title"}, "text": "Now plain again"}])
+    assert _title_weights(bold_title_deck) == [None]  # the bold copied from the old first run is dropped
+
+
+def test_shorthand_without_markers_drops_a_template_bold(hand_formatted_deck):
+    apply(hand_formatted_deck, [{"op": "set_text", "slide": 1, "target": {"name": "box"}, "text": "plain"}])
+    run = resolve_shape(slide1(hand_formatted_deck), {"name": "box"}).text_frame.paragraphs[0].runs[0]
+    assert run.text == "plain" and run._r.find(qn("a:rPr")).get("b") is None
+
+
+def test_font_bold_applies_to_runs_without_markers(hand_formatted_deck):
+    apply(hand_formatted_deck, [{"op": "set_text", "slide": 1, "target": {"name": "box"}, "text": "plain", "font": {"bold": False}}])
+    assert resolve_shape(slide1(hand_formatted_deck), {"name": "box"}).text_frame.paragraphs[0].runs[0].font.bold is False
+
+
+def test_raw_color_errors_suggest_allow_rgb_only_where_the_op_takes_it(title_deck):
+    run = {"t": "a", "color": "#FF0000"}
+    with pytest.raises(PptxSkillsError, match="raw color") as exc:
+        apply(title_deck, [{"op": "set_text", "slide": 1, "target": {"role": "title"}, "paragraphs": [{"runs": [run]}]}])
+    assert "allow_rgb" not in str(exc.value)
+    with pytest.raises(PptxSkillsError, match="raw color") as exc:
+        apply(title_deck, [{"op": "set_text", "slide": 1, "target": {"role": "title"}, "text": "a", "font": {"color": "#FF0000"}}])
+    assert "allow_rgb" not in str(exc.value)
+    for shape_op in (
+        {"op": "add_shape", "slide": 1, "name": "s", "shape": "rect", "box": [1, 1, 3, 2], "fill": "#FF0000"},
+        {"op": "add_shape", "slide": 1, "name": "s", "shape": "rect", "box": [1, 1, 3, 2], "paragraphs": [{"runs": [run]}]},
+    ):
+        with pytest.raises(PptxSkillsError, match='"allow_rgb": true'):
+            apply(title_deck, [shape_op])

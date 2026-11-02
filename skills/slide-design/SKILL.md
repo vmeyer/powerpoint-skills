@@ -237,7 +237,7 @@ screenshot, style from the brief. Never insert the screenshot as a picture.
 | Mistake | Instead |
 |---|---|
 | Added shape with text but no `font`: it gets the master's default text (often 18 pt, centered) | Give every text shape `font` (size, color), `align`, `anchor` and `insets` |
-| `textbox` for a block of text: it grows with its text, so `check` cannot report overflow | `rect` with `"fill": "none", "line": "none"` |
+| `textbox` for a block of text: it grows with its text instead of overflowing (`check` warns `grows-to-fit`) | `rect` with `"fill": "none", "line": "none"`, whose overflow `check` reports |
 | Fill or line left out, expecting a default look | Added shapes have no fill and no line until you set them |
 | Boxes estimated by eye | `pptx grid decks/<slug> --cols C --rows R`, then copy the boxes |
 | Title or kicker as a free text box | `set_text` with `{"role": "title"}` or `{"role": "kicker"}` |

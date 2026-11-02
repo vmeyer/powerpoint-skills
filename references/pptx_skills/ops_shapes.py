@@ -8,7 +8,7 @@ from pptx.util import Cm, Pt
 from lxml import etree
 
 from .changeset import Context, _walk, op, resolve_shape
-from .colors import apply_color, parse_color
+from .colors import RGB_OPTION, apply_color, parse_color
 from .errors import PptxSkillsError
 from .geometry import Box, _xfrm, snap_box
 from .ops_text import _format, _shorthand, write_paragraphs
@@ -64,7 +64,7 @@ def _check_name(slide, name: str) -> None:
 
 def _color(text: str, allow_rgb: bool, what: str):
     try:
-        return parse_color(str(text), allow_rgb)
+        return parse_color(str(text), allow_rgb, RGB_OPTION)  # every op that calls this takes allow_rgb
     except PptxSkillsError as exc:
         raise PptxSkillsError(f"{what}: {exc}") from exc
 

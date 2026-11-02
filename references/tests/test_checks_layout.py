@@ -209,3 +209,17 @@ def test_outside_content_skips_titles(make_deck, tmp_path, monkeypatch):
     monkeypatch.setattr("pptx_skills.checks.load_deck", lambda d: {})
     found = rules(run_checks(deck), "outside-content")
     assert [f["shape"] for f in found] == ["wide"]
+
+
+def test_uneven_gaps_fix_names_a_real_command(make_deck):
+    import re
+
+    from pptx_skills.cli import main
+
+    def fill(slide):
+        for i, x in enumerate((2, 8, 15)):
+            box(slide, f"b{i}", x, 5, 5, 3)
+
+    fix = finding(run_checks(build(make_deck, fill)), "uneven-gaps")["fix"]
+    commands = re.findall(r"`pptx ([a-z-]+)", fix)
+    assert commands == ["grid"] and all(main([c, "--help"]) == 0 for c in commands)

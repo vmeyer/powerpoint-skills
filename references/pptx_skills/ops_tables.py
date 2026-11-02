@@ -15,21 +15,6 @@ from .ops_text import _shorthand, write_paragraphs
 from .slides import resolve_slide
 
 
-def _cell_paragraphs(text: str, font: dict) -> list[dict]:
-    """The `text` shorthand for a cell.
-
-    Text without `**` writes no weight, so header cells keep the bold of the table style or the cloned cell.
-    Text with `**` is fully determined by the markers (plain runs get `b=0`); `font.bold: false` unbolds a whole cell.
-    """
-    paragraphs = _shorthand(text, font)
-    if "**" in text:  # explicit markers: bold is fully determined by them, as in a text box
-        return paragraphs
-    for paragraph in paragraphs:
-        for run in paragraph["runs"]:
-            run.pop("b", None)
-    return paragraphs
-
-
 _GUID = re.compile(r"^\{[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}$")
 
 
@@ -57,7 +42,8 @@ def _check_rectangular(rows: list[list[str]]) -> int:
 def _fill_cells(table, rows: list[list[str]], font: dict, allow_rgb: bool) -> None:
     for r, row in enumerate(rows):
         for c, text in enumerate(row):
-            write_paragraphs(table.cell(r, c).text_frame, _cell_paragraphs(text, font), font, allow_rgb)
+            # the shorthand rule of set_text: without `**` the cell takes its weight from the table style
+            write_paragraphs(table.cell(r, c).text_frame, _shorthand(text, font), font, allow_rgb)
 
 
 @op("add_table")

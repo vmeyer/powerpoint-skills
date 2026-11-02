@@ -14,6 +14,8 @@ from .. import cli
 from ..brief import DEFAULT_RULES, load_brief
 from ..deckdir import find_deck_dir, load_deck
 from ..errors import PptxSkillsError
+from ..fonts import _Inheritance, measure_paragraphs
+from ..geometry import Box, absolute_box, visual_box
 from ..inventory import inventory
 from ..opc import open_presentation
 
@@ -57,6 +59,10 @@ def rule(rule_id: str, category: str, severity: str, scope: str = "slide"):
     return decorate
 
 
+# measured text may exceed its box by this much before it counts (rounding, font metrics)
+TEXT_FIT_TOLERANCE_CM = 0.05
+
+
 @dataclass
 class SlideView:
     """One slide under check: its python-pptx slide, number, id and inventory entry."""
@@ -65,6 +71,26 @@ class SlideView:
     id: int
     pptx: object
     info: dict
+    _grown: dict = field(default_factory=dict, repr=False)
+
+    def grown_height(self, shape) -> float | None:
+        """The height in cm of a shape that grows to fit its text (`spAutoFit`), when it exceeds the stored height."""
+        if shape.shape_id not in self._grown:
+            self._grown[shape.shape_id] = self._measure_growth(shape)
+        return self._grown[shape.shape_id]
+
+    def _measure_growth(self, shape) -> float | None:
+        tx_body = shape._element.find(qn("p:txBody"))
+        if tx_body is None or not "".join(t.text or "" for t in tx_body.iter(qn("a:t"))).strip():
+            return None
+        if _Inheritance(shape, self.pptx).body().autofit != "shape":
+            return None
+        height = measure_paragraphs(shape, self.pptx).height_cm
+        return height if height > absolute_box(shape).h + TEXT_FIT_TOLERANCE_CM else None
+
+    def seen_box(self, shape) -> Box:
+        """What the viewer sees: the rotation-aware bounds (R21) at the grown height of a growing text box."""
+        return visual_box(shape, self.grown_height(shape))
 
     def shapes(self):
         """(inventory shape dict, python-pptx shape) for every shape, groups flattened."""

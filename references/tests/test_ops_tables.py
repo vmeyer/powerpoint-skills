@@ -168,9 +168,9 @@ def test_set_table_grows_and_shrinks(cloned_table):
     apply(deck, [{"op": "set_table", "slide": 1, "target": {"name": "tbl"}, "rows": rows}])
     assert table_item(deck)["table"] == rows
     table = frame_named(deck).table
-    for r in (1, 2, 3):  # rows copied from the last one keep its formatting
+    for r in (1, 2, 3):  # rows copied from the last one keep its formatting; plain text takes no weight (R13')
         run = table.cell(r, 1).text_frame.paragraphs[0].runs[0]
-        assert run.font.bold is True and run.font.size.pt == 13
+        assert run.font.bold is None and run.font.size.pt == 13
     assert frame_named(deck).height == sum(int(tr.get("h")) for tr in table._tbl.tr_lst)
     apply(deck, [{"op": "set_table", "slide": 1, "target": {"name": "tbl"}, "rows": [["only", "row"]]}])
     assert table_item(deck)["table"] == [["only", "row"]]

@@ -233,3 +233,41 @@ def test_short_prefix_is_not_a_prompt():
     assert not _is_prompt("Click", prompt) and not _is_prompt("C", prompt)
     assert _is_prompt("Click to edit", prompt)
     assert _is_prompt("Enter Chapter Title Here", "Enter chapter title")
+
+
+def growing_box(slide, y=2.0, lines=4, name="grows"):
+    """A word-wrapped text box 1 cm high that grows to fit its text (18 pt lines, about 3 cm for four)."""
+    box = add_box(slide, name, "\n".join(f"Line {n}" for n in range(1, lines + 1)), x=2, y=y, w=6, h=1, size=18)
+    box.text_frame.auto_size = MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT
+    return box
+
+
+def test_text_box_that_grows_is_checked_at_its_grown_size(make_deck):
+    import re
+
+    from pptx.enum.shapes import MSO_SHAPE
+
+    def fill(slide):
+        growing_box(slide)
+        below = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Cm(2), Cm(3.6), Cm(6), Cm(2))
+        below.name = "below"
+        below.text_frame.text = "Below"
+
+    report = run_checks(build(make_deck, fill))
+    grown = finding(report, "grows-to-fit", "grows")
+    assert grown["severity"] == "warning" and grown["category"] == "text"
+    height = float(re.search(r"grows to ([\d.]+) cm", grown["message"]).group(1))
+    assert 2.5 < height < 4.5
+    overlap = finding(report, "overlap")
+    assert overlap and "grows" in overlap["message"] and "below" in overlap["message"]
+    assert finding(report, "overflow") is None
+
+
+def test_text_box_growing_past_the_slide_is_off_slide(make_deck):
+    report = run_checks(build(make_deck, lambda s: growing_box(s, y=17.5)))  # the default slide is 19.05 cm high
+    assert finding(report, "off-slide", "grows")["severity"] == "error"
+
+
+def test_text_box_that_fits_its_box_is_not_reported(make_deck):
+    report = run_checks(build(make_deck, lambda s: growing_box(s, lines=1)))
+    assert finding(report, "grows-to-fit") is None and report["summary"]["error"] == 0
