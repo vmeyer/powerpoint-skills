@@ -42,6 +42,56 @@
               "slide": {"$ref": "#/$defs/slide_ref"},
               "to": {"type": "integer", "minimum": 1}
             }
+          },
+          {
+            "title": "set_text",
+            "type": "object",
+            "required": ["op", "slide", "target"],
+            "additionalProperties": false,
+            "oneOf": [{"required": ["text"]}, {"required": ["paragraphs"]}],
+            "properties": {
+              "op": {"const": "set_text"},
+              "slide": {"$ref": "#/$defs/slide_ref"},
+              "target": {"$ref": "#/$defs/target"},
+              "text": {"type": "string"},
+              "paragraphs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["runs"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "level": {"type": "integer", "minimum": 0, "maximum": 8},
+                    "bullet": {"type": "boolean"},
+                    "runs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "anyOf": [{"required": ["t"]}, {"required": ["br"]}],
+                        "additionalProperties": false,
+                        "properties": {
+                          "t": {"type": "string"},
+                          "br": {"type": "boolean"},
+                          "b": {"type": "boolean"},
+                          "i": {"type": "boolean"},
+                          "color": {"type": "string"},
+                          "size": {"type": "number", "exclusiveMinimum": 0}
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "font": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "size": {"type": "number", "exclusiveMinimum": 0},
+                  "color": {"type": "string"},
+                  "bold": {"type": "boolean"}
+                }
+              }
+            }
           }
         ]
       }

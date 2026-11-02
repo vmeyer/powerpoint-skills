@@ -250,6 +250,9 @@ def _move_slide(ctx: Context, spec: dict) -> None:
     ctx.touched.add(slide.slide_id)
 
 
+from . import ops_text  # noqa: E402,F401  (registers the text ops; bottom import avoids a cycle)
+
+
 def _handle_apply(args) -> int:
     path = Path(args.changeset)
     try:

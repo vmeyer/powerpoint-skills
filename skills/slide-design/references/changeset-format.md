@@ -85,3 +85,46 @@ Moves a slide so that it ends up at the 1-based position `to`.
 
 In decks with sections, an added or moved slide joins the section of the slide it now follows (the first
 section when it becomes slide 1), so every slide stays in exactly one section.
+
+## Text
+
+### set_text
+
+Writes the text of one shape (`target` is `{"role": ...}`, `{"name": ...}` or `{"id": ...}`; a shape inside a
+group is found too). Give exactly one of `text` or `paragraphs`. Formatting the op does not specify is kept: the
+first run's properties and the first paragraph's properties of the existing text are the template for everything
+written. Colors are theme roles (`accent1`, `accent2+40`); raw `#RRGGBB` is rejected.
+
+Shorthand: `\n` separates paragraphs, `**…**` marks bold runs.
+
+```json
+{"op": "set_text", "slide": 1, "target": {"role": "title"}, "text": "**Bold** lead\nSecond paragraph"}
+```
+
+Runs with color, size and a bullet level (`level` 0-8, `bullet` true or false):
+
+```json
+{"op": "set_text", "slide": 2, "target": {"role": "body"}, "paragraphs": [
+  {"level": 1, "bullet": true, "runs": [{"t": "R4", "color": "accent1", "b": true}, {"t": " Review", "i": true, "size": 14}]}
+]}
+```
+
+Line break inside a paragraph: a run `{"br": true}` (the inventory form `{"t": "\n", "br": true}` is accepted too).
+
+```json
+{"op": "set_text", "slide": 2, "target": {"name": "Subtitle"}, "paragraphs": [
+  {"runs": [{"t": "First line"}, {"br": true}, {"t": "Second line"}]}
+]}
+```
+
+`font` (`size`, `color`, `bold`) applies to every run; a run's own `b`, `size` or `color` wins.
+
+```json
+{"op": "set_text", "slide": 1, "target": {"role": "title"}, "text": "Quarterly review", "font": {"size": 32, "color": "tx2"}}
+```
+
+Kicker (the small label above the title), where the master has one:
+
+```json
+{"op": "set_text", "slide": 1, "target": {"role": "kicker"}, "text": "CLASSIFICATION"}
+```
