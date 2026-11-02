@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import cli
-from .brief import build_brief, write_brief
+from .brief import build_brief, load_brief, write_brief
 from .errors import PptxSkillsError
 from .opc import file_hash, open_presentation, save_presentation
 from .slides import delete_slide
@@ -75,14 +75,26 @@ def _style_rules(style_file: str | None) -> dict | None:
     return rules if isinstance(rules, dict) else None
 
 
-def refresh_brief(deck_dir: Path, deck: dict) -> dict:
-    """Rebuild style/brief.json and brief.md from the working copy, the examples and the style file."""
+def refresh_brief(deck_dir: Path, deck: dict, force: bool = False, notes: list[str] | None = None) -> dict:
+    """Rebuild style/brief.json, brief.md and the contact sheets (skipped while the sources are unchanged).
+
+    `force` re-renders the sheets; messages for the user (e.g. skipped sheets) are appended to `notes`.
+    """
+    from .render import update_sheets
+
     deck_dir = Path(deck_dir)
     master = open_presentation(deck_dir / deck["working_copy"])
     examples_path = deck["sources"].get("examples")
     examples = open_presentation(examples_path) if examples_path else None
     brief = build_brief(master, examples, _style_rules(deck["sources"].get("style_file")))
+    try:
+        previous = (load_brief(deck_dir) or {}).get("sources_hash")
+    except PptxSkillsError:
+        previous = None
+    brief["sources_hash"], sheet_notes = update_sheets(deck_dir, deck, previous, force)
     write_brief(brief, deck_dir / "style")
+    if notes is not None:
+        notes.extend(sheet_notes)
     return brief
 
 
@@ -102,6 +114,7 @@ def init_deck(
     style_file: Path | None = None,
     keep_slides: bool = False,
     mode: str = "new",
+    notes: list[str] | None = None,
 ) -> dict:
     deck_dir = Path(deck_dir)
     exists = _deck_json(deck_dir).is_file()
@@ -112,7 +125,7 @@ def init_deck(
         for key, value in (("master", source), ("examples", examples), ("style_file", style_file)):
             if value is not None:
                 deck["sources"][key] = _abs(value)
-        refresh_brief(deck_dir, deck)
+        refresh_brief(deck_dir, deck, notes=notes)
         _save_deck(deck_dir, deck)
         return deck
     if source is None and style_file is None:
@@ -145,7 +158,7 @@ def init_deck(
             "seq": 0,
             "last_touched": [],
         }
-        refresh_brief(stage, deck)
+        refresh_brief(stage, deck, notes=notes)
         _save_deck(stage, deck)
         deck_dir.mkdir(parents=True, exist_ok=True)
         if mode == "replace":
@@ -188,6 +201,7 @@ def _summary(deck: dict) -> str:
 
 
 def _handle_init(args) -> int:
+    notes: list[str] = []
     mode = "reuse" if args.reuse else "replace" if args.replace else "new"
     deck = init_deck(
         Path(args.deck_dir),
@@ -196,17 +210,23 @@ def _handle_init(args) -> int:
         Path(args.style_file) if args.style_file else None,
         args.keep_slides,
         mode,
+        notes,
     )
-    cli.emit(args, deck, _summary(deck))
+    cli.emit(args, {**deck, "notes": notes} if notes else deck, "\n".join([_summary(deck), *notes]))
     return cli.OK
 
 
 def _handle_style(args) -> int:
     deck_dir = Path(args.deck_dir)
     deck = load_deck(deck_dir)
-    refresh_brief(deck_dir, deck)  # --refresh gains meaning with the contact sheets (Task 12)
-    data = {"brief": str(deck_dir / "style" / "brief.json"), "markdown": str(deck_dir / "style" / "brief.md")}
-    cli.emit(args, data, f"Style brief written to {data['markdown']}")
+    notes: list[str] = []
+    refresh_brief(deck_dir, deck, force=args.refresh, notes=notes)
+    style = deck_dir / "style"
+    data = {"brief": str(style / "brief.json"), "markdown": str(style / "brief.md"), "notes": notes}
+    for key, name in (("layouts", "layouts.png"), ("examples", "examples.png")):
+        if (style / name).is_file():
+            data[key] = str(style / name)
+    cli.emit(args, data, "\n".join([f"Style brief written to {data['markdown']}", *notes]))
     return cli.OK
 
 
@@ -225,6 +245,6 @@ def register(subparsers) -> None:
 
     style = subparsers.add_parser("style", help="Rebuild the style brief of a deck folder.")
     style.add_argument("deck_dir", help="deck folder")
-    style.add_argument("--refresh", action="store_true", help="rebuild cached style artifacts")
+    style.add_argument("--refresh", action="store_true", help="re-render the contact sheets even if the sources are unchanged")
     style.add_argument("--json", action="store_true", help="machine-readable output")
     style.set_defaults(handler=_handle_style)
