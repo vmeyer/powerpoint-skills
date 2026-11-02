@@ -101,3 +101,18 @@ def test_neutral_date_is_a_current_date_field():
     slide = add_slide(prs, "Title Only")
     assert [f.get("type") for f in slide._element.iter(qn("a:fld"))].count("datetime1") == 1
     assert "1/27/13" not in "".join(t.text or "" for t in slide._element.iter(qn("a:t")))
+
+
+def test_neutral_text_is_sized_for_two_line_action_titles(tmp_path):
+    from pptx_skills.changeset import apply_changeset
+    from pptx_skills.checks import run_checks
+
+    b = build_brief(neutral_presentation())
+    assert b["text_styles"]["title_pt"] == 33 and b["text_styles"]["body_pt"][:4] == [24, 21, 18, 15]
+    init_deck(tmp_path / "decks/t", None)
+    deck = tmp_path / "decks/t/t.pptx"
+    title = "Three steps take a team from a first pilot to a routine that lasts"
+    apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Title Only"},
+                                   {"op": "set_text", "slide": "$last", "target": {"role": "title"}, "text": title}]})
+    report = run_checks(deck, strict=True)
+    assert not [f for f in report["findings"] if f["rule"] in ("overflow", "too-many-lines")], report["findings"]

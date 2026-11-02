@@ -101,6 +101,19 @@ def set_theme(prs, colors: dict, fonts: dict, name: str | None = None) -> None:
         part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
 
+_TEXT_SCALE = 0.75
+_SIZED = tuple(qn(t) for t in ("a:defRPr", "a:rPr", "a:endParaRPr"))
+
+
+def _scale_text(prs) -> None:
+    """The default template sizes text for 4:3 (44 pt titles, 32 pt body), which wraps an action title to two lines
+    that overflow the title box; three quarters (33 pt, 24 pt) fit two lines and still read as titles."""
+    for part in [prs.slide_master, *prs.slide_layouts]:
+        for el in part._element.iter(*_SIZED):
+            if (el.get("sz") or "").isdigit():
+                el.set("sz", str(round(int(el.get("sz")) * _TEXT_SCALE / 100) * 100))
+
+
 def _current_dates(prs) -> None:
     """The default template's date placeholders hold a "date figured out" field with a fixed 1/27/13, which
     LibreOffice shows as is; a plain date field shows the current date in PowerPoint and LibreOffice alike."""
@@ -121,6 +134,7 @@ def neutral_presentation(style: dict | None = None):
     prs.slide_width, prs.slide_height = _WIDTH, _HEIGHT
     prs.part._element.find(qn("p:sldSz")).attrib.pop("type", None)  # the default template says screen4x3
     _scale_x(prs)
+    _scale_text(prs)
     _current_dates(prs)
     set_theme(prs, {**NEUTRAL_COLORS, **style.get("colors", {})}, {**NEUTRAL_FONTS, **style.get("fonts", {})}, "Neutral")
     return prs
