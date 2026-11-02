@@ -14,7 +14,7 @@ COMMAND_MODULES: list[ModuleType] = []
 
 # Command modules, imported on first use so that importing cli stays cheap and cycle-free.
 # New commands are added to _COMMAND_NAMES.
-_COMMAND_NAMES = ("inventory", "deckdir")
+_COMMAND_NAMES = ("inventory", "deckdir", "changeset")
 
 
 def _load_commands() -> None:

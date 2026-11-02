@@ -114,3 +114,12 @@ def examples_with_three_accent1_rects(make_deck):
             shp.fill.fore_color.theme_color = 5  # ACCENT_1
 
     return make_deck(build, name="examples.pptx")
+
+
+@pytest.fixture
+def deck_dir_from_default(tmp_path, default_pptx):
+    from pptx_skills.deckdir import init_deck
+
+    deck_dir = tmp_path / "decks/d"
+    init_deck(deck_dir, default_pptx)
+    return deck_dir
