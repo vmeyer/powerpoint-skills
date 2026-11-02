@@ -90,6 +90,7 @@ def test_storyline_example_follows_the_format():
         fields = dict(re.findall(r"^- \*\*(\w+):\*\* (.+)$", entry, re.M))
         assert {"Kicker", "Title", "Shows", "Sources", "Status", "Id"} <= set(fields), entry
         assert fields["Id"] == "—" or fields["Id"].isdigit(), entry
+        assert len(fields["Title"]) <= 120, fields["Title"]  # two lines at title size, as the format says
         statuses.add(fields["Status"])
     assert statuses == {"open", "in design", "approved", "existing"}
     assert not re.search(r" [·|•] ", example)  # no keyword chains

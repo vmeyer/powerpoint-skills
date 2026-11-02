@@ -52,7 +52,7 @@ Every deck lives in `decks/<slug>/` in the user's project, the slug in kebab-cas
 | an existing deck to continue | `pptx init decks/<slug> --from <deck.pptx> --keep-slides` |
 | no master at all | `pptx init decks/<slug> --style-file <style.json>`: builds the deck on a neutral 16:9 template; the optional style file sets colors and fonts ([style-file.md](references/style-file.md)) |
 | any of the above, with their own check thresholds | add `--style-file <style.json>` with `rules` only |
-| only a `storyline.md` in `decks/<slug>/` | `init` into that folder from the storyline's "Style sources" (`--keep-slides` when it says "keep slides"); the storyline stays |
+| only a `storyline.md` in `decks/<slug>/` | `init` into that folder from the storyline's "Style sources": `from` → `--from`, "(keep slides)" → `--keep-slides`, `examples` → `--examples`, `style file` → `--style-file`. If it says `not chosen yet`, ask for one first. The storyline stays |
 | a deck folder with `deck.json` already | no init; work in it (`pptx style decks/<slug>` refreshes the brief) |
 
 `init` copies the source to `decks/<slug>/<slug>.pptx`, the **working copy**; the user's own file
@@ -114,11 +114,15 @@ entry's status, id and, when the wording changed during design, its kicker and t
 - An entry with an Id is an existing slide: revise it, addressing it as `"id:<Id>"` in change
   sets. Its current number, for `check` and `render`, is in
   `pptx inventory decks/<slug>/<slug>.pptx --outline`. An entry without an Id is a new slide.
+- A new slide goes after the slide of the nearest preceding entry that has an Id
+  (`"after": "id:<Id>"` in `add_slide` or `clone_slide`). When no preceding entry has one, it
+  becomes slide 1: add it, then `{"op": "move_slide", "slide": "$last", "to": 1}`.
 - Set the entry to `in design` when you start, write the slide id into Id as soon as `apply`
   reports the new slide, and set `approved` when the user approves.
 - Restructuring the deck (new entries, cuts, a new order, a changed message) is `deck-storyline`'s
   job; switch to it when the user asks for that. When it cuts or moves an entry that has an id,
-  delete or move that slide here (`delete_slide`, `move_slide`) once the user confirms.
+  delete or move that slide here (`delete_slide`, `move_slide`) once the user confirms; after a
+  delete, remove the cut entry (its Note says "To delete").
 
 ## The render-check-review loop
 

@@ -18,7 +18,7 @@ The file starts with `# Storyline: <deck title>`, followed by these fields as a 
 | Format | `live talk`, `pre-read`, or both ("live talk, sent as a pre-read afterwards") |
 | Duration | Minutes and the slide count that fits them ("20 minutes, 8 slides") |
 | Language | The language of all text on the slides |
-| Style sources | Paths for `pptx init`: master, example deck, style file. For a deck being continued, its path plus "keep slides". `not chosen yet` when the user has not named one |
+| Style sources | What `pptx init` needs, by role: `from <path>` (the master or template; `--from`), `examples <path>` (`--examples`), `style file <path>` (`--style-file`). A continued deck is the `from` source, marked "(keep slides)" (`--keep-slides`); a separate master is then not used. `not chosen yet` when the user has not named one |
 | Input | Files and folders the storyline is built from: research run, report, notes; "conversation" for free text |
 
 ## Entries
@@ -44,7 +44,7 @@ After the header comes `## Slides` with one entry per slide, in the intended sli
 | Sources | Where the facts in title and body come from. From a research run: source id and short name, claim ids in parentheses (`S004 Pilot survey (C011)`); otherwise the file or document ("pilot retro notes"). `—` when the slide states no facts |
 | Status | One of the four statuses below |
 | Id | The slide's stable id in the working copy (`pptx inventory` prints it as `id 257`); `—` until the slide exists |
-| Notes | Optional: detail meant for the speaker notes, what was cut from the slide, open questions starting with "Open question:" |
+| Notes | Optional: detail meant for the speaker notes, what was cut from the slide, open questions starting with "Open question:". "To delete" marks a cut entry whose slide still exists; the entry goes once `slide-design` has deleted the slide |
 
 `<N>` is the entry's position, which is the intended slide number. After an insert, move or cut,
 renumber every heading so they run 1, 2, 3, … again. Positions change; ids never do.
@@ -89,7 +89,7 @@ approved, slide 3 is being designed, the rest are still open.
 - **Format:** live talk with discussion, sent as a pre-read afterwards
 - **Duration:** 20 minutes plus 10 minutes of discussion, 8 slides
 - **Language:** English
-- **Style sources:** `~/Templates/master.potx`; examples from `~/Decks/quarterly-review.pptx`; continues `~/Decks/focus-time-draft.pptx` (keep slides)
+- **Style sources:** from `~/Decks/focus-time-draft.pptx` (keep slides); examples `~/Decks/quarterly-review.pptx`
 - **Input:** `research/runs/20261028-focus-time/` (verified claims and sources); pilot retro notes
 
 ## Slides
@@ -129,7 +129,7 @@ approved, slide 3 is being designed, the rest are still open.
 
 ### Slide 5
 - **Kicker:** Options
-- **Title:** Of three ways to cut meeting load, only meeting-free afternoons protect long focus blocks without new rules for every team.
+- **Title:** Of three ways to cut meeting load, only meeting-free afternoons protect long focus blocks without new team rules.
 - **Shows:** Comparison of meeting budgets, shorter default meetings and meeting-free afternoons on focus blocks gained, effort to introduce and risk to decisions; the recommended option highlighted.
 - **Sources:** S002 Calendar study (C007); S005 Practitioner survey (C009)
 - **Status:** open

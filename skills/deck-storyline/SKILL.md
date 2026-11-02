@@ -65,7 +65,8 @@ resolve there. Below, `pptx …` is short for the full command.
 8. **Refine** in conversation. For every change (add, cut, merge, split, reorder, retitle) edit the
    file, renumber the headings, keep ids and statuses as the format says, and show the changed
    lines again. Cutting or moving an entry that has an id changes the deck as well: once the user
-   confirms, `slide-design` deletes or moves that slide (`delete_slide`, `move_slide`).
+   confirms, `slide-design` deletes or moves that slide (`delete_slide`, `move_slide`). Until the
+   slide is deleted, a cut entry stays in the file with the Note "To delete".
 9. **Hand over** when the user agrees (see "Hand-over to slide design").
 
 ## Inputs
@@ -117,9 +118,9 @@ pptx inventory <their-deck.pptx> --outline
 
 Each line `<number> (id <id>) | <kicker> | <title>` becomes an entry with that kicker, title and
 id, and status `existing`. For "Shows", write one sentence from the slide's content
-(`pptx inventory <deck.pptx> --slides N`). In the header, list the deck under "Style sources" with
-"keep slides". `slide-design` then runs `pptx init` with `--keep-slides`, which copies the deck
-with its slide ids, so the ids in the storyline stay valid.
+(`pptx inventory <deck.pptx> --slides N`). In the header, write the deck under "Style sources" as
+`from <deck.pptx> (keep slides)`. `slide-design` then runs `pptx init` with `--keep-slides`, which
+copies the deck with its slide ids, so the ids in the storyline stay valid.
 
 Keep existing titles as they are, even topic titles. Propose better ones in the conversation. When
 the user agrees, change the entry and set it to `open`, keeping its id, so that `slide-design`
@@ -133,16 +134,18 @@ When `storyline.md` and a working copy both exist, compare them before you chang
 pptx inventory decks/<slug>/<slug>.pptx --outline
 ```
 
-- A title or kicker in the deck differs from an entry that is not `open`: the deck is the truth
-  (hand edits). Update the entry and tell the user. An `open` entry with an id differs on purpose:
-  it waits for `slide-design` to revise the slide.
-- An entry's id is missing from the deck: the slide was deleted. Tell the user, then cut the
-  entry or clear its id and set it to `open`.
+- First, re-link when the working copy was set up again from another file, or when many titles
+  differ at once. Ids start at 256 in every deck, so old ids may point at the wrong slides. Match
+  entries to slides by title, take over the new ids, and ask when a match is unsure.
+- A title or kicker in the deck differs from an `approved` or `existing` entry: the deck is the
+  truth (hand edits). Update the entry and tell the user. `open` and `in design` entries differ on
+  purpose: their slides wait for, or are in, `slide-design`.
+- An entry's id is missing from the deck: the slide was deleted. If the entry's Note says "To
+  delete", remove the entry. Otherwise tell the user, then cut the entry or clear its id and set
+  it to `open`.
 - A slide has no entry: tell the user and add it at its position as `existing`.
 - The order differs: say so and ask which order is meant. `slide-design` moves slides; the
   storyline only records the order.
-- Most ids are missing because the deck was set up again from another file: re-link instead.
-  Match entries to slides by title, take over the new ids, and ask when a match is unsure.
 
 ## Length
 
