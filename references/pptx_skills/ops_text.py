@@ -64,7 +64,7 @@ def _style_paragraph(p_el, spec: dict) -> None:
             ppr.attrib.pop("indent", None)
 
 
-def _format(run, spec: dict, font: dict) -> None:
+def _format(run, spec: dict, font: dict, allow_rgb: bool = False) -> None:
     """Apply explicit formatting; the run keeps whatever else it inherited from the template."""
     merged = {**font, **{k: v for k, v in spec.items() if k in ("b", "i", "size", "color")}}
     if "bold" in font and "b" not in spec:
@@ -76,7 +76,7 @@ def _format(run, spec: dict, font: dict) -> None:
     if "size" in merged:
         run.font.size = Pt(merged["size"])
     if "color" in merged:
-        ref = parse_color(str(merged["color"]))
+        ref = parse_color(str(merged["color"]), allow_rgb)
         if ref is None:
             fill = run._r.get_or_add_rPr().find(qn("a:solidFill"))
             if fill is not None:
@@ -89,12 +89,13 @@ def _is_break(spec: dict) -> bool:
     return bool(spec.get("br"))
 
 
-def write_paragraphs(text_frame, paragraphs: list[dict], font: dict | None = None) -> None:
+def write_paragraphs(text_frame, paragraphs: list[dict], font: dict | None = None, allow_rgb: bool = False) -> None:
     """Replace the text of `text_frame`.
 
     `paragraphs` is `[{"level"?, "bullet"?, "runs": [{"t", "b"?, "i"?, "color"?, "size"?} | {"br": true}]}]`.
     The first paragraph's properties and first run's properties are the template for everything written, so
     formatting the caller does not specify survives. `font` (size, color, bold) applies to every run.
+    Raw `#RRGGBB` colors are rejected unless `allow_rgb`.
     """
     font = font or {}
     body = text_frame._txBody
@@ -127,7 +128,7 @@ def write_paragraphs(text_frame, paragraphs: list[dict], font: dict | None = Non
                 if old is not None:
                     run._r.remove(old)
                 run._r.insert(0, copy.deepcopy(template_rpr))
-            _format(run, run_spec, font)
+            _format(run, run_spec, font, allow_rgb)
 
 
 @op("set_text")

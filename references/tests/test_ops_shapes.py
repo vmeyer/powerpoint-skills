@@ -81,7 +81,8 @@ def test_add_shape_theme_fill_text_and_snap(deck_with_guides):
                               "fill": "accent1+60", "line": "none", "text": "**Kein Ziel**\nLohnt sich nicht", "font": {"size": 12}}])
     s = shape_named(deck_with_guides, "cell-r1")
     info = inv_shape(deck_with_guides, "cell-r1")
-    assert info["box"][0] == 1.49 and info["fill"]  # 1.49 is the left guide of the guided master == "accent1+60" and info["line"] == "none"
+    assert info["box"][0] == 1.49  # the left guide of the guided master
+    assert info["fill"] == "accent1+60" and info["line"] == "none"
     runs = s.text_frame.paragraphs[0].runs
     assert runs[0].font.bold and runs[0].font.size.pt == 12
     assert s.text_frame.paragraphs[1].runs[0].font.bold is False
@@ -232,3 +233,45 @@ def test_schema_rejects_text_and_paragraphs_together(deck):
                       "text": "a", "paragraphs": [{"runs": [{"t": "b"}]}]}])
     with pytest.raises(PptxSkillsError, match="add_shape"):
         apply(deck, [{"op": "add_shape", "slide": 1, "name": "x", "shape": "triangle", "box": [1, 1, 2, 2]}])
+
+
+def test_unstyled_shape_has_no_style_fill_or_line(deck):
+    apply(deck, [{"op": "add_shape", "slide": 1, "name": "plain", "shape": "rect", "box": [2, 2, 5, 3]},
+                 {"op": "add_shape", "slide": 1, "name": "styled", "shape": "rect", "box": [8, 2, 5, 3],
+                  "fill": "accent2", "line": {"color": "dk1", "width_pt": 1}}])
+    el = shape_named(deck, "plain")._element
+    assert el.find(qn("p:style")) is None
+    info = inv_shape(deck, "plain")
+    assert info["fill"] is None and info["line"] is None
+    styled = shape_named(deck, "styled")._element
+    assert styled.find(qn("p:style")) is None
+    assert inv_shape(deck, "styled")["fill"] == "accent2"
+    assert inv_shape(deck, "styled")["line"] == {"color": "dk1", "width_pt": 1}
+
+
+def test_allow_rgb_reaches_text_colors(deck):
+    op = {"op": "add_shape", "slide": 1, "name": "t", "shape": "rect", "box": [2, 2, 5, 3], "text": "Hi",
+          "font": {"color": "#FF0000"}}
+    with pytest.raises(PptxSkillsError, match="allow_rgb"):
+        apply(deck, [op])
+    apply(deck, [dict(op, allow_rgb=True)])
+    run = shape_named(deck, "t").text_frame.paragraphs[0].runs[0]
+    assert str(run.font.color.rgb) == "FF0000"
+
+
+def test_font_only_update_restyles_existing_runs(deck):
+    apply(deck, [{"op": "add_shape", "slide": 1, "name": "s", "shape": "rect", "box": [2, 2, 5, 3], "text": "**A** b"}])
+    apply(deck, [{"op": "update_shape", "slide": 1, "target": {"name": "s"}, "font": {"size": 20, "color": "accent3"}}])
+    runs = shape_named(deck, "s").text_frame.paragraphs[0].runs
+    assert [r.font.size.pt for r in runs] == [20, 20]
+    assert runs[0].font.bold and not runs[1].font.bold  # bold untouched
+    assert runs[0].font.color.theme_color is not None
+
+
+def test_style_only_update_keeps_word_wrap(deck):
+    apply(deck, [{"op": "add_shape", "slide": 1, "name": "s", "shape": "rect", "box": [2, 2, 5, 3], "text": "x"}])
+    prs = open_presentation(deck)
+    resolve_shape(prs.slides[0], {"name": "s"}).text_frame._txBody.find(qn("a:bodyPr")).set("wrap", "none")
+    prs.save(str(deck))
+    apply(deck, [{"op": "update_shape", "slide": 1, "target": {"name": "s"}, "fill": "accent1"}])
+    assert shape_named(deck, "s").text_frame._txBody.find(qn("a:bodyPr")).get("wrap") == "none"

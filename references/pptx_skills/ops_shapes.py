@@ -11,7 +11,7 @@ from .changeset import Context, _walk, op, resolve_shape
 from .colors import apply_color, parse_color
 from .errors import PptxSkillsError
 from .geometry import Box, _xfrm, snap_box
-from .ops_text import _shorthand, write_paragraphs
+from .ops_text import _format, _shorthand, write_paragraphs
 from .slides import resolve_slide
 
 _PRESETS = {
@@ -114,13 +114,20 @@ def _set_line(shape, line, allow_rgb: bool) -> None:
             raise PptxSkillsError(f'unknown dash "{line["dash"]}" (solid, dash, sysDash, dot, sysDot, lgDash, dashDot, lgDashDot, lgDashDotDot)') from exc
 
 
-def _set_text(shape, spec: dict) -> None:
+def _set_text(shape, spec: dict, wrap: bool = False) -> None:
     tf = shape.text_frame
     font = spec.get("font") or {}
+    allow_rgb = bool(spec.get("allow_rgb"))
     if "text" in spec or "paragraphs" in spec:
         paragraphs = _shorthand(spec["text"], font) if "text" in spec else spec["paragraphs"]
-        write_paragraphs(tf, paragraphs, font)
-    tf.word_wrap = True
+        write_paragraphs(tf, paragraphs, font, allow_rgb)
+        wrap = True
+    elif font:  # font alone restyles the existing runs
+        for para in tf.paragraphs:
+            for run in para.runs:
+                _format(run, {}, font, allow_rgb)
+    if wrap:
+        tf.word_wrap = True
     if "align" in spec:
         for para in tf.paragraphs:
             para.alignment = _ALIGN[spec["align"]]
@@ -131,7 +138,7 @@ def _set_text(shape, spec: dict) -> None:
         tf.margin_left, tf.margin_top, tf.margin_right, tf.margin_bottom = Cm(l), Cm(t), Cm(r), Cm(b)
 
 
-def _style(shape, spec: dict) -> None:
+def _style(shape, spec: dict, wrap: bool = False) -> None:
     allow_rgb = bool(spec.get("allow_rgb"))
     _set_fill(shape, spec, allow_rgb)
     if "line" in spec:
@@ -141,7 +148,7 @@ def _style(shape, spec: dict) -> None:
             raise PptxSkillsError('"radius" only applies to roundRect shapes')
         shape.adjustments[0] = spec["radius"]
     if shape.has_text_frame:
-        _set_text(shape, spec)
+        _set_text(shape, spec, wrap)
 
 
 def _place(shape, box: Box) -> None:
@@ -159,7 +166,10 @@ def _add_shape(ctx: Context, spec: dict) -> None:
     else:
         shape = slide.shapes.add_shape(_PRESETS[kind], Cm(box.x), Cm(box.y), Cm(box.w), Cm(box.h))
     shape.name = spec["name"]
-    _style(shape, spec)
+    style = shape._element.find(qn("p:style"))
+    if style is not None:  # unstyled shapes have no fill, line or effects and inherit the default text style
+        shape._element.remove(style)
+    _style(shape, spec, wrap=True)
     ctx.touched.add(slide.slide_id)
 
 
