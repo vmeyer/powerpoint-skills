@@ -52,3 +52,20 @@ def test_cli_exit_codes(capsys):
 
     assert run_handler(boom, argparse.Namespace()) == 2
     assert "error: bad input" in capsys.readouterr().err
+
+
+def test_open_rejects_corrupt_pptx(tmp_path):
+    (tmp_path / "x.pptx").write_bytes(b"")
+    with pytest.raises(PptxSkillsError, match="cannot be read"):
+        open_presentation(tmp_path / "x.pptx")
+
+
+def test_open_rejects_corrupt_potx(tmp_path):
+    (tmp_path / "x.potx").write_bytes(b"not a zip")
+    with pytest.raises(PptxSkillsError, match="cannot be read"):
+        open_presentation(tmp_path / "x.potx")
+
+
+def test_open_rejects_missing_file(tmp_path):
+    with pytest.raises(PptxSkillsError, match="does not exist"):
+        open_presentation(tmp_path / "missing.pptx")
