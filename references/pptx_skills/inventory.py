@@ -11,6 +11,7 @@ from .opc import open_presentation
 from .roles import placeholder_role
 from .units import EMU_PER_PT, emu_to_cm
 
+_RUN_TAGS = (qn("a:r"), qn("a:br"), qn("a:fld"))
 _AUTOFIT = {"noAutofit": "none", "spAutoFit": "shape", "normAutofit": "shrink"}
 _TITLE_TYPES = (PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE, PP_PLACEHOLDER.VERTICAL_TITLE)
 
@@ -78,7 +79,11 @@ def _line(sp_pr):
 
 
 def _run(r) -> dict:
+    if r.tag == qn("a:br"):
+        return {"t": "\n", "br": True}
     run = {"t": r.findtext(qn("a:t")) or ""}
+    if r.tag == qn("a:fld"):
+        run["field"] = r.get("type")
     r_pr = r.find(qn("a:rPr"))
     if r_pr is not None:
         if r_pr.get("b") is not None:
@@ -101,7 +106,7 @@ def _text(shape) -> dict | None:
     for p in tx_body.findall(qn("a:p")):
         p_pr = p.find(qn("a:pPr"))
         level = int(p_pr.get("lvl", 0)) if p_pr is not None else 0
-        paragraphs.append({"level": level, "runs": [_run(r) for r in p.findall(qn("a:r"))]})
+        paragraphs.append({"level": level, "runs": [_run(r) for r in p if r.tag in _RUN_TAGS]})
     body_pr = tx_body.find(qn("a:bodyPr"))
     autofit = None
     if body_pr is not None:

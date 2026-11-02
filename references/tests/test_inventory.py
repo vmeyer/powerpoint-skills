@@ -173,3 +173,37 @@ def test_cli_errors(deck_with_two_slides, capsys):
     assert main(["inventory", str(deck_with_two_slides), "--slides", "9"]) == 2
     assert "error:" in capsys.readouterr().err
     assert main(["inventory", str(deck_with_two_slides.with_name("missing.pptx"))]) == 2
+
+
+def test_line_break_and_field_runs(default_pptx):
+    from lxml import etree
+    from pptx.oxml.ns import nsdecls
+
+    prs = Presentation(default_pptx)
+    s = prs.slides.add_slide(prs.slide_layouts[5])
+    p = s.shapes.title.text_frame.paragraphs[0]._p
+    for xml in (
+        '<a:r %s><a:t>Foo</a:t></a:r>',
+        '<a:br %s/>',
+        '<a:r %s><a:t>Bar</a:t></a:r>',
+        '<a:fld %s id="{B6F15528-21DE-4FAA-801E-634DDDAF4B2B}" type="slidenum"><a:t>7</a:t></a:fld>',
+    ):
+        p.append(etree.fromstring(xml % nsdecls("a")))
+    sl = inventory(prs)["slides"][0]
+    assert sl["title"] == "Foo\nBar7"
+    runs = sl["shapes"][0]["text"]["paragraphs"][0]["runs"]
+    assert runs == [
+        {"t": "Foo"},
+        {"t": "\n", "br": True},
+        {"t": "Bar"},
+        {"t": "7", "field": "slidenum"},
+    ]
+    assert '"Foo / Bar7"' in to_markdown(inventory(prs))
+
+
+def test_repeated_main_registers_commands_once(deck_with_two_slides):
+    from pptx_skills.cli import COMMAND_MODULES
+
+    for _ in range(2):
+        assert main(["inventory", "--help"]) == 0
+    assert len(COMMAND_MODULES) == len(set(COMMAND_MODULES))
