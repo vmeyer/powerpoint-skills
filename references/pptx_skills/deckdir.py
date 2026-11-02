@@ -92,12 +92,18 @@ def _style_rules(style_file: str | None) -> dict | None:
 
 
 def refresh_brief(
-    deck_dir: Path, deck: dict, force: bool = False, notes: list[str] | None = None, renderer: str | None = None
+    deck_dir: Path,
+    deck: dict,
+    force: bool = False,
+    notes: list[str] | None = None,
+    renderer: str | None = None,
+    sheets: bool = False,
 ) -> dict:
-    """Rebuild style/brief.json, brief.md and the contact sheets (skipped while the sources are unchanged).
+    """Rebuild style/brief.json and brief.md; with `sheets` also the contact sheets of layouts and examples
+    (skipped while the sources are unchanged).
 
-    `force` re-renders the sheets with `renderer` (default: PPTX_SKILLS_RENDERER, else auto); messages for the
-    user (e.g. skipped sheets) are appended to `notes`.
+    `force` re-renders the sheets with `renderer` (default: PPTX_SKILLS_RENDERER, else auto) and implies `sheets`;
+    messages for the user (e.g. skipped sheets) are appended to `notes`.
     """
     from .render import update_sheets
 
@@ -110,7 +116,10 @@ def refresh_brief(
         previous = (load_brief(deck_dir) or {}).get("sources_hash")
     except PptxSkillsError:
         previous = None
-    brief["sources_hash"], sheet_notes = update_sheets(deck_dir, deck, previous, force, renderer)
+    if sheets or force:
+        brief["sources_hash"], sheet_notes = update_sheets(deck_dir, deck, previous, force, renderer)
+    else:  # sheets that exist stay; the old hash lets a later --sheets see whether they are stale
+        brief["sources_hash"], sheet_notes = previous, []
     write_brief(brief, deck_dir / "style")
     if notes is not None:
         notes.extend(sheet_notes)
@@ -153,8 +162,10 @@ def init_deck(
     mode: str = "new",
     notes: list[str] | None = None,
     renderer: str | None = None,
+    sheets: bool = False,
 ) -> dict:
-    """Create (or reuse or replace) the deck folder; `renderer` renders the contact sheets (see refresh_brief)."""
+    """Create (or reuse or replace) the deck folder. Without `source` and `style_file` the working copy starts on
+    the neutral 16:9 template. `sheets` renders the contact sheets with `renderer` (see refresh_brief)."""
     deck_dir = Path(deck_dir)
     exists = _deck_json(deck_dir).is_file()
     if mode == "new" and exists:
@@ -164,11 +175,9 @@ def init_deck(
         for key, value in (("master", source), ("examples", examples), ("style_file", style_file)):
             if value is not None:
                 deck["sources"][key] = _abs(value)
-        refresh_brief(deck_dir, deck, notes=notes, renderer=renderer)
+        refresh_brief(deck_dir, deck, notes=notes, renderer=renderer, sheets=sheets)
         _save_deck(deck_dir, deck)
         return deck
-    if source is None and style_file is None:
-        raise PptxSkillsError("init needs --from <master.potx|pptx> or --style-file <style.json>")
 
     slug = _slug(deck_dir)
     working_copy = f"{slug}.pptx"
@@ -210,7 +219,7 @@ def init_deck(
             # the highest slide id ever used here; new slides get higher ids (R26)
             "max_slide_id": max([MIN_SLIDE_ID - 1, *(s.slide_id for s in prs.slides), (old or {}).get("max_slide_id") or 0]),
         }
-        refresh_brief(stage, deck, notes=notes, renderer=renderer)
+        refresh_brief(stage, deck, notes=notes, renderer=renderer, sheets=sheets)
         _save_deck(stage, deck)
         deck_dir.mkdir(parents=True, exist_ok=True)
         if old is not None:
@@ -271,8 +280,12 @@ def changed_externally(deck_dir: Path) -> bool:
     return file_hash(Path(deck_dir) / deck["working_copy"]) != deck["last_hash"]
 
 
-def _summary(deck: dict) -> str:
-    return f"Deck {deck['slug']} ready: {deck['working_copy']}, style/brief.md"
+def _summary(deck: dict, deck_dir: Path) -> str:
+    text = f"Deck {deck['slug']} ready: {deck['working_copy']}, style/brief.md"
+    if not deck["sources"].get("master"):
+        text += (f"\nIt starts on the neutral 16:9 template (no master); set its colors and fonts with "
+                 f"`pptx theme {deck_dir} --color accent1=#RRGGBB --font major=<family>`")
+    return text
 
 
 def _handle_init(args) -> int:
@@ -287,8 +300,9 @@ def _handle_init(args) -> int:
         mode,
         notes,
         args.renderer,
+        args.sheets,
     )
-    cli.emit(args, {**deck, "notes": notes} if notes else deck, "\n".join([_summary(deck), *notes]))
+    cli.emit(args, {**deck, "notes": notes} if notes else deck, "\n".join([_summary(deck, Path(args.deck_dir)), *notes]))
     return cli.OK
 
 
@@ -296,7 +310,7 @@ def _handle_style(args) -> int:
     deck_dir = Path(args.deck_dir)
     deck = load_deck(deck_dir)
     notes: list[str] = []
-    refresh_brief(deck_dir, deck, force=args.refresh, notes=notes, renderer=args.renderer)
+    refresh_brief(deck_dir, deck, force=args.refresh, notes=notes, renderer=args.renderer, sheets=args.sheets)
     style = deck_dir / "style"
     data = {"brief": str(style / "brief.json"), "markdown": str(style / "brief.md"), "notes": notes}
     for key, name in (("layouts", "layouts.png"), ("examples", "examples.png")):
@@ -311,19 +325,24 @@ def register(subparsers) -> None:
 
     init = subparsers.add_parser("init", help="Create a deck folder with a working copy and a style brief.")
     init.add_argument("deck_dir", help="deck folder, e.g. decks/<slug>")
-    init.add_argument("--from", dest="source", help="master or deck (.potx/.pptx) whose layouts define the style")
+    init.add_argument(
+        "--from", dest="source",
+        help="master or deck (.potx/.pptx) whose layouts define the style; without it the deck starts on a neutral 16:9 template",
+    )
     init.add_argument("--examples", help="example deck (.pptx) to learn style usage from")
     init.add_argument("--style-file", help="style file (JSON) with check rules")
     init.add_argument("--keep-slides", action="store_true", help="keep the slides of the source deck")
     group = init.add_mutually_exclusive_group()
     group.add_argument("--reuse", action="store_true", help="keep the working copy, refresh the brief")
     group.add_argument("--replace", action="store_true", help="start over in an existing deck folder; files the deck does not own stay")
+    init.add_argument("--sheets", action="store_true", help="also render contact sheets of the layouts and examples to style/")
     add_renderer_option(init)
     init.add_argument("--json", action="store_true", help="machine-readable output")
     init.set_defaults(handler=_handle_init)
 
     style = subparsers.add_parser("style", help="Rebuild the style brief of a deck folder.")
     style.add_argument("deck_dir", help="deck folder")
+    style.add_argument("--sheets", action="store_true", help="also render contact sheets of the layouts and examples to style/")
     style.add_argument("--refresh", action="store_true", help="re-render the contact sheets even if the sources are unchanged")
     add_renderer_option(style)
     style.add_argument("--json", action="store_true", help="machine-readable output")

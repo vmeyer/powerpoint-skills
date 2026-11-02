@@ -131,7 +131,7 @@ def test_doctor_reports_fonts_and_exit_code(monkeypatch, tmp_path, default_pptx,
 
 def test_init_without_a_renderer_still_succeeds(monkeypatch, tmp_path, default_pptx, capsys):
     monkeypatch.setattr(render_mod, "find_soffice", lambda: None)
-    assert main(["init", str(tmp_path / "d"), "--from", str(default_pptx)]) == 0
+    assert main(["init", str(tmp_path / "d"), "--from", str(default_pptx), "--sheets"]) == 0
     assert "contact sheets skipped: neither PowerPoint nor LibreOffice found" in capsys.readouterr().out
     assert not (tmp_path / "d/style/layouts.png").exists()
 
@@ -148,15 +148,17 @@ def test_style_stores_hash_and_skips_unchanged_sheets(monkeypatch, tmp_path, def
     monkeypatch.setattr(render_mod, "find_pdftoppm", lambda: render_mod.Path("/x/pdftoppm"))
     monkeypatch.setattr(render_mod, "render_layouts", fake_layouts)
     d = tmp_path / "d"
-    init_deck(d, default_pptx)
+    init_deck(d, default_pptx, sheets=True)
     assert len(rendered) == 1 and load_brief(d)["sources_hash"]
-    assert main(["style", str(d)]) == 0
+    assert main(["style", str(d), "--sheets"]) == 0
     assert len(rendered) == 1  # unchanged sources: skipped
     assert main(["style", str(d), "--refresh"]) == 0
     assert len(rendered) == 2
     deck = load_deck(d)
     (d / deck["working_copy"]).write_bytes((d / deck["working_copy"]).read_bytes() + b"\0")
-    assert main(["style", str(d)]) == 0
+    assert main(["style", str(d)]) == 0  # without --sheets: the brief only, and the hash stays
+    assert len(rendered) == 2
+    assert main(["style", str(d), "--sheets"]) == 0
     assert len(rendered) == 3
 
 
@@ -208,7 +210,7 @@ def test_init_survives_sheet_write_failure(monkeypatch, tmp_path, default_pptx, 
     monkeypatch.setattr(render_mod, "find_soffice", lambda: render_mod.Path("/x/soffice"))
     monkeypatch.setattr(render_mod, "find_pdftoppm", lambda: render_mod.Path("/x/pdftoppm"))
     monkeypatch.setattr(render_mod, "render_layouts", boom)
-    assert main(["init", str(tmp_path / "d"), "--from", str(default_pptx)]) == 0
+    assert main(["init", str(tmp_path / "d"), "--from", str(default_pptx), "--sheets"]) == 0
     assert "contact sheets skipped: disk full" in capsys.readouterr().out
 
 
@@ -242,7 +244,7 @@ def test_render_examples_and_sheet_hash_paths(monkeypatch, fake_tools, deck_with
     assert out.is_file() and labels[-1] == ["Slide 1", "Slide 2"]
 
     d = tmp_path / "d"
-    init_deck(d, default_pptx, examples=deck_with_two_slides)
+    init_deck(d, default_pptx, examples=deck_with_two_slides, sheets=True)
     assert (d / "style/examples.png").is_file() and (d / "style/layouts.png").is_file()
     deck = load_deck(d)
     h = load_brief(d)["sources_hash"]
@@ -269,7 +271,7 @@ def test_layout_sheet_of_a_deck_whose_zoom_follows_its_target(fake_tools, make_d
 def test_neutral_deck_renders_layout_sheet(tmp_path):
     style = tmp_path / "style.json"
     style.write_text("{}")
-    init_deck(tmp_path / "n", None, style_file=style)
+    init_deck(tmp_path / "n", None, style_file=style, sheets=True)
     assert (tmp_path / "n/style/layouts.png").stat().st_size > 0
 
 
@@ -565,7 +567,7 @@ def test_sheets_stop_trying_powerpoint_after_it_failed(fake_powerpoint, monkeypa
     """In auto mode the examples sheet goes straight to LibreOffice once the layouts sheet fell back."""
     with_libreoffice(monkeypatch)
     fake_powerpoint.behavior = "timeout"
-    assert main(["init", str(tmp_path / "decks/a"), "--from", str(default_pptx), "--examples", str(examples_deck)]) == 0
+    assert main(["init", str(tmp_path / "decks/a"), "--from", str(default_pptx), "--examples", str(examples_deck), "--sheets"]) == 0
     assert len(fake_powerpoint.exports) == 1 and len(fake_powerpoint.soffice) == 2
     out = capsys.readouterr().out
     assert out.count("PowerPoint could not render") == 1
@@ -574,18 +576,18 @@ def test_sheets_stop_trying_powerpoint_after_it_failed(fake_powerpoint, monkeypa
 
 def test_init_takes_a_renderer(fake_powerpoint, monkeypatch, tmp_path, default_pptx):
     with_libreoffice(monkeypatch)
-    assert main(["init", str(tmp_path / "decks/a"), "--from", str(default_pptx), "--renderer", "libreoffice"]) == 0
+    assert main(["init", str(tmp_path / "decks/a"), "--from", str(default_pptx), "--renderer", "libreoffice", "--sheets"]) == 0
     assert fake_powerpoint.exports == [] and len(fake_powerpoint.soffice) == 1
     deck = load_deck(tmp_path / "decks/a")
-    assert main(["init", str(tmp_path / "decks/a"), "--reuse", "--renderer", "libreoffice"]) == 0
+    assert main(["init", str(tmp_path / "decks/a"), "--reuse", "--renderer", "libreoffice", "--sheets"]) == 0
     assert fake_powerpoint.exports == [] and deck == load_deck(tmp_path / "decks/a")
 
 
 def test_one_export_folder_per_project(fake_powerpoint, tmp_path, default_pptx, examples_deck):
     """Every new folder costs the user a "Grant Access" dialog, so all decks and their sheets share decks/_export."""
     decks = tmp_path / "decks"
-    init_deck(decks / "a", default_pptx, examples_deck)  # layouts and examples sheets, rendered while staging
-    init_deck(decks / "b", default_pptx)
+    init_deck(decks / "a", default_pptx, examples_deck, sheets=True)  # layouts and examples sheets, rendered while staging
+    init_deck(decks / "b", default_pptx, sheets=True)
     render(decks / "a/a.pptx")
     assert main(["style", str(decks / "b"), "--refresh"]) == 0
     assert len(fake_powerpoint.exports) == 5
@@ -598,7 +600,7 @@ def test_one_export_folder_per_project(fake_powerpoint, tmp_path, default_pptx, 
 def test_style_takes_a_renderer_and_reports_the_fallback(fake_powerpoint, monkeypatch, tmp_path, default_pptx, capsys):
     with_libreoffice(monkeypatch)
     d = tmp_path / "d"
-    init_deck(d, default_pptx)
+    init_deck(d, default_pptx, sheets=True)
     assert len(fake_powerpoint.exports) == 1 and (d / "style/layouts.png").is_file()
     assert main(["style", str(d), "--refresh", "--renderer", "libreoffice"]) == 0
     assert len(fake_powerpoint.exports) == 1 and len(fake_powerpoint.soffice) == 1
@@ -611,7 +613,7 @@ def test_style_takes_a_renderer_and_reports_the_fallback(fake_powerpoint, monkey
 
 def test_init_survives_a_failing_powerpoint(fake_powerpoint, tmp_path, default_pptx, capsys):
     fake_powerpoint.behavior = "timeout"
-    assert main(["init", str(tmp_path / "d"), "--from", str(default_pptx)]) == 0
+    assert main(["init", str(tmp_path / "d"), "--from", str(default_pptx), "--sheets"]) == 0
     assert "contact sheets skipped: PowerPoint could not export" in capsys.readouterr().out
     assert sorted(p.name for p in (tmp_path / "d/style").iterdir()) == ["brief.json", "brief.md"]
     assert_empty_export_folder(tmp_path)
@@ -620,7 +622,7 @@ def test_init_survives_a_failing_powerpoint(fake_powerpoint, tmp_path, default_p
 
 def test_init_survives_an_unknown_renderer_in_the_environment(monkeypatch, tmp_path, default_pptx, capsys):
     monkeypatch.setenv("PPTX_SKILLS_RENDERER", "keynote")
-    assert main(["init", str(tmp_path / "d"), "--from", str(default_pptx)]) == 0
+    assert main(["init", str(tmp_path / "d"), "--from", str(default_pptx), "--sheets"]) == 0
     assert "contact sheets skipped: PPTX_SKILLS_RENDERER" in capsys.readouterr().out
 
 

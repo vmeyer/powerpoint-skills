@@ -58,9 +58,9 @@ def test_changed_externally(tmp_path, potx_file):
     assert changed_externally(tmp_path / "z")
 
 
-def test_usage_errors(tmp_path, potx_file):
-    with pytest.raises(PptxSkillsError, match="--from"):
-        init_deck(tmp_path / "n", None)
+def test_init_without_a_source_uses_the_neutral_template(tmp_path):
+    deck = init_deck(tmp_path / "n", None)
+    assert deck["sources"]["master"] is None and len(open_presentation(tmp_path / "n/n.pptx").slides) == 0
 
 
 def test_style_file_rules_and_invalid_json(tmp_path, potx_file):
@@ -134,7 +134,7 @@ def test_cli_init_and_style(tmp_path, potx_file, capsys):
     (d / "style/brief.json").unlink()
     assert main(["style", str(d), "--refresh"]) == 0
     assert (d / "style/brief.json").exists()
-    assert main(["init", str(tmp_path / "e")]) == 2
+    assert main(["init", str(tmp_path / "e")]) == 0  # no source: the neutral template
     assert main(["init", "--help"]) == 0
 
 

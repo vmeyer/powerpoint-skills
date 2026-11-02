@@ -75,22 +75,30 @@ def _scale_x(prs) -> None:
                     el.set(attr, str(round(int(el.get(attr)) * 4 / 3)))
 
 
-def _style_theme(prs, colors: dict, fonts: dict) -> None:
-    part = prs.slide_master.part.part_related_by(RT.THEME)
-    root = etree.fromstring(part.blob)
-    root.set("name", "Neutral")
-    scheme = root.find(".//" + qn("a:clrScheme"))
-    scheme.set("name", "Neutral")
-    for role, value in colors.items():
-        el = scheme.find(qn(f"a:{role}"))
-        for child in list(el):
-            el.remove(child)
-        etree.SubElement(el, qn("a:srgbClr")).set("val", value.lstrip("#").upper())
-    font_scheme = root.find(".//" + qn("a:fontScheme"))
-    font_scheme.set("name", "Neutral")
-    for key, tag in (("major", "a:majorFont"), ("minor", "a:minorFont")):
-        font_scheme.find(f"{qn(tag)}/{qn('a:latin')}").set("typeface", fonts[key])
-    part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+THEME_ROLES = ("dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink")
+
+
+def set_theme(prs, colors: dict, fonts: dict, name: str | None = None) -> None:
+    """Write theme colors ({role: "#RRGGBB"}) and fonts ({"major"|"minor": family}) into the theme of every slide
+    master; roles and fonts left out keep their value. `name` also renames the theme and its schemes."""
+    parts = {id(m.part.part_related_by(RT.THEME)): m.part.part_related_by(RT.THEME) for m in prs.slide_masters}
+    for part in parts.values():
+        root = etree.fromstring(part.blob)
+        scheme = root.find(".//" + qn("a:clrScheme"))
+        font_scheme = root.find(".//" + qn("a:fontScheme"))
+        if name is not None:
+            for el in (root, scheme, font_scheme):
+                el.set("name", name)
+        for role, value in colors.items():
+            el = scheme.find(qn(f"a:{role}"))
+            if el is None:
+                raise PptxSkillsError(f"the theme has no color {role}, so it cannot be set")
+            for child in list(el):
+                el.remove(child)
+            etree.SubElement(el, qn("a:srgbClr")).set("val", value.lstrip("#").upper())
+        for key, family in fonts.items():
+            font_scheme.find(f"{qn('a:' + key + 'Font')}/{qn('a:latin')}").set("typeface", family)
+        part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
 
 def _current_dates(prs) -> None:
@@ -114,5 +122,5 @@ def neutral_presentation(style: dict | None = None):
     prs.part._element.find(qn("p:sldSz")).attrib.pop("type", None)  # the default template says screen4x3
     _scale_x(prs)
     _current_dates(prs)
-    _style_theme(prs, {**NEUTRAL_COLORS, **style.get("colors", {})}, {**NEUTRAL_FONTS, **style.get("fonts", {})})
+    set_theme(prs, {**NEUTRAL_COLORS, **style.get("colors", {})}, {**NEUTRAL_FONTS, **style.get("fonts", {})}, "Neutral")
     return prs
