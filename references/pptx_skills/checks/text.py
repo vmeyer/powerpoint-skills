@@ -61,7 +61,12 @@ def overflow(ctx, slide):
 
 def _is_prompt(text: str, prompt: str) -> bool:
     a, b = _norm(text), _norm(prompt)
-    return bool(a) and bool(b) and (a.startswith(b) or b.startswith(a))
+    if not a or not b:
+        return False
+    if a.startswith(b):
+        return True
+    # slide text that is only the beginning of the prompt counts when it is a whole-word, substantial prefix
+    return b.startswith(a) and b[len(a)] == " " and (len(a.split()) >= 2 or len(a) >= 12)
 
 
 @rule("leftover-text", "text", "error")
@@ -72,7 +77,7 @@ def leftover_text(ctx, slide):
         text = "\n".join(_paragraph_texts(shape._element))
         why = None
         ph = shape._element.ph
-        layout_ph = _layout_placeholder(ph, slide.pptx.slide_layout) if ph is not None else None
+        layout_ph = _layout_placeholder(ph, slide.pptx.slide_layout) if ph is not None and item["role"] not in _SMALL_ROLES else None
         if layout_ph is not None and _is_prompt(text, "\n".join(_paragraph_texts(layout_ph))):
             why = "it is still the layout's prompt text"
         elif (match := _LEFTOVER.search(text)):

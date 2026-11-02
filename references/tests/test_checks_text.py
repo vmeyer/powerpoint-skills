@@ -206,3 +206,30 @@ def test_deck_folder_default_slides_and_files(deck_dir_from_default):
     assert (deck_dir_from_default / "check/slide-02.json").is_file()
     assert run_checks(deck_dir_from_default, all_slides=True)["slides"] == [1, 2]
     assert run_checks(deck_dir_from_default, slides=[1])["slides"] == [1]
+
+
+def test_footer_equal_to_layout_footer_is_not_leftover(make_deck):
+    import copy
+
+    from pptx.oxml.ns import qn
+
+    def builder(prs):
+        layout = layout_named(prs, "Blank")
+        layout_footer = next(s for s in layout.placeholders if s.placeholder_format.type == 15)
+        layout_footer.text_frame.text = "| Company AG"
+        slide = prs.slides.add_slide(layout)
+        el = copy.deepcopy(layout_footer._element)
+        el.find(qn("p:spPr")).clear()
+        slide.shapes._spTree.append(el)
+
+    report = run_checks(make_deck(builder))
+    assert finding(report, "leftover-text") is None
+
+
+def test_short_prefix_is_not_a_prompt():
+    from pptx_skills.checks.text import _is_prompt
+
+    prompt = "Click to edit Master title style"
+    assert not _is_prompt("Click", prompt) and not _is_prompt("C", prompt)
+    assert _is_prompt("Click to edit", prompt)
+    assert _is_prompt("Enter Chapter Title Here", "Enter chapter title")
