@@ -1,6 +1,6 @@
 {
   "name": "powerpoint-skills",
-  "description": "Design PowerPoint slides one at a time in the style of any master or deck: a storyline first, then each slide built natively in a working copy, rendered to PNG and checked before you see it.",
+  "description": "Design PowerPoint slides or whole decks as native, editable shapes, with or without your master: built in a working copy, checked and rendered to PNG before you see it, and refined from your feedback.",
   "version": "1.0.0",
   "author": {
     "name": "Volker Meyer"

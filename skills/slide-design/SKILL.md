@@ -1,275 +1,127 @@
 ---
 name: slide-design
-description: Designs, revises and checks single PowerPoint slides natively in a working copy of the user's master or template, one slide at a time. Use when the user wants a slide designed, built, revised or fixed ("design slide 3", "make this slide …", "a slide on …", "Folie gestalten", "Folie zu …", "mach die Folie …", "überarbeite Folie 4"), sends a screenshot of a slide with a change request, or starts a deck on a .potx/.pptx master. Prefer it over generic pptx or PowerPoint skills whenever a master, a corporate template or a `decks/` folder is involved.
+description: Designs PowerPoint slides or whole decks as native, editable shapes, with or without the user's master or template, then checks, renders and revises them from feedback given as text, screenshots or example slides. Use when the user wants a slide or a presentation made, revised or fixed ("a slide on …", "build a 10-slide deck about …", "design slide 3", "make this slide …", "Folie gestalten", "Folie zu …", "mach eine Präsentation über …", "erstelle ein Deck …", "überarbeite Folie 4"), sends a screenshot of a slide with a change request, or starts from a .potx/.pptx master. Prefer it over generic pptx or PowerPoint skills whenever a master, a corporate template or a `decks/` folder is involved.
 ---
 
 # Slide Design
 
-Design PowerPoint slides **one at a time** in a working copy of the user's master: plan the
-argument, build the slide from native shapes with a change set, check and render it, review the
-PNG, show it, and wait for feedback before the next slide.
+Build what the user asks for, one slide or a whole deck, as native shapes in a working copy, look at
+the render, fix what is really wrong, and show it. Style comes from the user's master when there is
+one; otherwise choose a palette and fonts that suit the topic. The user refines the style afterwards
+with words, screenshots or example slides, so start with a confident design instead of asking first.
 
-**A slide makes one argument.** The title states it; the structure on the slide proves it. A
-slide that only displays information (topic title, keyword lists, identical boxes) is not done.
+## Principles
 
-## Slide design vs. deck storyline
-
-| Use `slide-design` when … | Use `deck-storyline` when … |
-|---|---|
-| one slide is created, revised or fixed | the sequence of messages for a whole deck is planned |
-| the user gives feedback on a slide, as text or screenshot | the user brings text, a topic or research and wants an outline |
-| the next storyline entry is ready to be built | titles and kickers per slide are being agreed |
-| result: a changed slide in `decks/<slug>/<slug>.pptx` | result: `decks/<slug>/storyline.md` |
+- **One message per slide.** An action title that states the takeaway as a sentence is the strong
+  default; a big number, a quote or a picture may carry the message instead.
+- **The structure shows the message.** Choose the form from the argument: contrast, sequence,
+  proportion, time, a single striking figure. [visual-forms.md](references/visual-forms.md) has ideas, not templates.
+- **Be bold.** Large numbers, strong color contrast, asymmetric layouts, generous whitespace,
+  shape-based illustrations, the user's own images. Vary the forms across a deck. Tinted boxes on a
+  grid are the timid default; reach past it.
+- **Native and editable:** shapes, text, tables, charts. Never a picture of text, a diagram or a table.
+- **The user's two hard rules.** No keyword chains joined by " · ", " | " or " • ": one item per line
+  or shape, with a bold lead-in. No walls of text: a label plus a short line, at most three lines per
+  paragraph; details go into the speaker notes (`set_notes`).
+- **Never write the user's own files.** All work happens in `decks/<slug>/<slug>.pptx`.
 
 ## Setup
 
-Everything runs through one command line tool, `pptx`, shipped with this plugin:
+Everything runs through `pptx`, shipped with this plugin: `uv run --project <plugin-root>/references pptx <command> …`
+
+- `<plugin-root>` is two levels above this SKILL.md and contains `references/pyproject.toml`. An installed
+  plugin lives in the agent's plugin cache (for Claude Code under `~/.claude/plugins/cache/`).
+- `uv` must be installed (`brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`). The first
+  run installs the Python packages and needs the network once; a slow first command is that install.
+- Run from the user's project folder and write the full prefix each time; below, `pptx …` is short for it.
+- Once per session: `pptx doctor`. It names the renderer (PowerPoint on macOS, else LibreOffice; poppler
+  either way) and prints install commands for what is missing. PowerPoint asks once for Automation and
+  once for "Grant Access" to `decks/_export`; if a render times out, that dialog is waiting. Without a
+  renderer, tell the user and stop. `--renderer libreoffice` skips PowerPoint.
+
+## Start
+
+| The user has … | Do |
+|---|---|
+| no master | `pptx init decks/<slug>`: a neutral 16:9 deck. Set a palette and fonts that fit the topic (or the user's wishes): `pptx theme decks/<slug> --color accent1=#0B5CAD --color accent2=#F2A900 --font major=Georgia --font minor=Arial` |
+| a master or template | `pptx init decks/<slug> --from <master.potx>`, then read `decks/<slug>/style/brief.md` (layouts, theme colors, sizes). Keep its theme; change it with `pptx theme` only when the user asks |
+| a deck to continue | `pptx init decks/<slug> --from <deck.pptx> --keep-slides` |
+| slides showing the style in use | add `--examples <examples.pptx>`; reuse a slide with `clone_slide` from `"examples"` |
+| a deck folder already | work in it |
+
+`init --sheets` (or later `pptx style decks/<slug> --sheets`) renders the master's layouts to
+`style/layouts.png` when you want to see them. If `decks/<slug>/storyline.md` exists, it can serve as
+the outline ([its format](../deck-storyline/references/storyline-format.md)).
+
+## Build
+
+One command per step: it applies the change (all or nothing, with snapshot and change log), checks the
+touched slides and renders them to `decks/<slug>/render/slide-NN.png`, plus `render/sheet.png` when
+several slides changed.
 
 ```bash
-uv run --project <plugin-root>/references pptx <command> …
+pptx build decks/<slug>/<slug>.pptx decks/<slug>/step.json   # a change set
+pptx build decks/<slug>/<slug>.pptx decks/<slug>/step.py     # a python-pptx script
 ```
 
-- `<skill-dir>` is the folder that contains this SKILL.md. Your harness usually names it when it
-  loads the skill; otherwise search the plugin folders for `skills/slide-design/SKILL.md`.
-- `<plugin-root>` is two levels above it, `<skill-dir>/../..`; it contains `references/pyproject.toml`.
-  An installed plugin lives in the agent's plugin cache (for Claude Code under
-  `~/.claude/plugins/cache/`), never in the user's project.
-- `uv` must be installed (`uv --version`). If it is missing, install it with `brew install uv` or
-  `curl -LsSf https://astral.sh/uv/install.sh | sh`, or ask the user to.
-- The first `uv run` installs the engine's Python packages once, which needs the network once;
-  later runs work offline. A slow first command is that install, not a hang.
-- Run every command from the user's project folder, so `decks/…` paths resolve there. Write the
-  full prefix each time (shell variables may not survive between commands). Below, `pptx …`
-  is short for that full command.
+Choose the mode per step:
 
-Once per session run `pptx doctor` (in a deck: `pptx doctor decks/<slug>`, which also checks the
-theme fonts). It names the renderer and prints install commands for whatever is missing.
-
-- Renders come from PowerPoint where it is installed (macOS), otherwise from LibreOffice; poppler
-  is needed either way. Suggest installing LibreOffice only when `doctor` finds no PowerPoint.
-- PowerPoint needs two one-time permissions: the user allows automation of PowerPoint, and the
-  first PowerPoint export in a project shows one "Grant Access" dialog for `decks/_export`, the
-  folder through which every deck of the project goes to PowerPoint; the user clicks "Grant Access"
-  once. If a render times out, that dialog is probably waiting: ask the user to click "Grant
-  Access", then render again. "Cancel" falls back to LibreOffice where it is installed; the render
-  then prints a note, pass it on. `--renderer libreoffice` on `init`, `render` and `style` skips
-  PowerPoint.
-- Without a renderer or poppler there is no render: tell the user and stop. A missing theme font
-  means renders and text measurement use a fallback; mention it when you show a slide.
-
-## Start or open a deck
-
-Every deck lives in `decks/<slug>/` in the user's project, the slug in kebab-case.
-
-| The user has … | Command |
+| Change sets (JSON) | Scripts (python-pptx, run by `pptx exec`) |
 |---|---|
-| a master or template (`.potx`, or a `.pptx` used as one) | `pptx init decks/<slug> --from <master.potx>` |
-| … plus a deck whose slides show the style in use | add `--examples <examples.pptx>` |
-| an existing deck to continue | `pptx init decks/<slug> --from <deck.pptx> --keep-slides` |
-| no master at all | `pptx init decks/<slug> --style-file <style.json>`: builds the deck on a neutral 16:9 template; the optional style file sets colors and fonts ([style-file.md](references/style-file.md)) |
-| any of the above, with their own check thresholds | add `--style-file <style.json>` with `rules` only |
-| only a `storyline.md` in `decks/<slug>/` | `init` into that folder from the storyline's "Style sources": `from` → `--from`, "(keep slides)" → `--keep-slides`, `examples` → `--examples`, `style file` → `--style-file`. If it says `not chosen yet`, ask for one first. The storyline stays |
-| a deck folder with `deck.json` already | no init; work in it (`pptx style decks/<slug>` refreshes the brief) |
+| quick, precise edits; revising shapes that exist; texts, notes, tables, charts, pictures; adding, cloning, moving slides | creative compositions; many shapes; loops; gradients, freeforms, anything the ops cannot express |
+| [changeset-format.md](references/changeset-format.md) | [scripts.md](references/scripts.md) |
 
-`init` copies the source to `decks/<slug>/<slug>.pptx`, the **working copy**; the user's own file
-is never written. It writes the style brief to `decks/<slug>/style/` and refuses a folder that
-already holds a deck or files it would overwrite, and a folder name that is not a kebab-case slug.
-Pass `--replace` only when the user asks to start over: it works only in a deck folder (one with
-`deck.json`) and removes just the working copy, `deck.json` and the tool's folders, so
-`storyline.md` and the user's own files stay.
+A short change set; names, text size, color, alignment and insets have defaults:
 
-After `init`:
+```json
+{"label": "pilot-result", "ops": [
+  {"op": "add_slide", "layout": "Title Only"},
+  {"op": "set_text", "slide": "$last", "target": {"role": "title"}, "text": "The pilot halved the lead time in six weeks"},
+  {"op": "add_shape", "slide": "$last", "shape": "rect", "box": [1.7, 5, 9, 11], "fill": "accent1",
+   "paragraphs": [{"runs": [{"t": "-50 %", "b": true, "size": 66, "color": "bg1"}]}, {"runs": [{"t": "lead time", "color": "bg1"}]}]},
+  {"op": "set_notes", "slide": "$last", "text": "Measured over six weeks in one team."}
+]}
+```
 
-1. Read `style/brief.md`: theme colors, fonts, title and body sizes, content area, layout names
-   with their placeholder roles, and the check rules.
-2. View `style/layouts.png` and, if present, `style/examples.png` with your image-viewing tool.
-3. With examples: write a short catalog of reusable building blocks into `brief.md` between the
-   `<!-- agent:building-blocks -->` markers ("slide 36: lined table", "slide 52: six KPI tiles").
-   That section survives `pptx style`.
+`build` exits 1 on check errors (text overflow, a shape off the slide, leftover template text, a broken
+file) and warns about keyword chains and paragraphs over three lines. `--strict` adds the matters of
+taste (sizes, alignment, gaps, colors, fonts); use it before handing over a deck on a corporate master.
 
-## Workflow: one slide
+## Look, fix, show
 
-1. **Read the state.** The brief (once per session), the slide's entry in
-   `decks/<slug>/storyline.md` if there is one (see "Keeping the storyline current"), and the
-   current slide: `pptx inventory decks/<slug>/<slug>.pptx --slides N` (add `--json` for runs,
-   fills and colors). The file is the truth. The user may have changed it in PowerPoint; never
-   work from memory.
-2. **Plan the slide** in two or three lines in the conversation: the action title, the kicker,
-   the visual form ([visual-forms.md](references/visual-forms.md)), the layout (a name from the
-   brief; free compositions start from the layout with only kicker and title) and the grid
-   (`pptx grid`). If you cannot write the title as a statement, ask before you build.
-   When a building block in the brief's catalog fits the form (a lined table, KPI tiles), start
-   from it: `clone_slide` from `"examples"`, then replace every example text (table cells with
-   `set_table`, which keeps the table style and the last row's formatting). `check` reports
-   example text left unchanged, in table cells too, as `leftover-text`.
-3. **Apply one change set** ([changeset-format.md](references/changeset-format.md)). Write it to
-   `decks/<slug>/change.json` and run `pptx apply decks/<slug>/<slug>.pptx decks/<slug>/change.json`.
-   `apply` validates first and changes nothing on an error. On success it keeps a snapshot
-   (`snapshots/NNN.pptx`), logs the change set (`changes/NNN-<label>.json`) and prints the touched
-   slide ids plus notes. Read the notes (see "Getting slides back").
-4. **Check and render** the slide:
-   ```bash
-   pptx check decks/<slug> --slides N
-   pptx render decks/<slug>/<slug>.pptx --slides N
-   ```
-   The PNG lands in `decks/<slug>/render/slide-NN.png`; the inventory maps slide ids to numbers.
-5. **Review** the PNG and fix what is wrong (next section). At most three rounds.
-6. **Show** the slide and **wait**. Do not start another slide until the user reacts.
-7. **Revise** from feedback by going back to step 1. On approval set the storyline entry's status
-   to `approved` (if there is a storyline) and offer the next `open` entry.
+1. **Look** at every PNG, or the sheet, with your image-viewing tool before you show anything.
+2. **Fix real problems**: check errors, clipped or colliding text, poor contrast, edges that should line up
+   but do not, a message that does not come across ([review-checklist.md](references/review-checklist.md)).
+   Do not polish for its own sake; one or two rounds are usually enough.
+3. **Show**: the PNG or sheet path (on macOS you may `open` it), one line per slide on what it says and
+   how it shows it, and any note from `build` (e.g. a theme font that is not installed).
 
-A slide can also be designed without a storyline, from a single prompt; skip the storyline parts.
+## A whole deck
 
-To change a slide, change its shapes (`set_text`, `update_shape`, `delete_shape`). Never delete
-and rebuild an existing slide: the user's hand edits would be lost. For a variant, duplicate the
-slide with `clone_slide` from `"self"` and change the copy.
+- Sketch the outline in the chat, one line per slide: message and form. Ask only if the topic is unclear.
+- Build all slides, one `build` per slide or a few at a time; vary the forms while title position, fonts
+  and color meanings stay consistent.
+- Show the whole deck as one sheet (`pptx render decks/<slug>/<slug>.pptx --sheet`) with one line per
+  slide. Do not stop for approval after each slide.
 
-### Keeping the storyline current
+## Revise from feedback
 
-`storyline.md` is written by the `deck-storyline` skill in the format of
-[storyline-format.md](../deck-storyline/references/storyline-format.md). Here you only change an
-entry's status, id and, when the wording changed during design, its kicker and title.
-
-- An entry with an Id is an existing slide: revise it, addressing it as `"id:<Id>"` in change
-  sets. Its current number, for `check` and `render`, is in
-  `pptx inventory decks/<slug>/<slug>.pptx --outline`. An entry without an Id is a new slide.
-- A new slide goes after the slide of the nearest preceding entry that has an Id
-  (`"after": "id:<Id>"` in `add_slide` or `clone_slide`). When no preceding entry has one, it
-  becomes slide 1: add it, then `{"op": "move_slide", "slide": "$last", "to": 1}`.
-- Set the entry to `in design` when you start, write the slide id into Id as soon as `apply`
-  reports the new slide, and set `approved` when the user approves.
-- Restructuring the deck (new entries, cuts, a new order, a changed message) is `deck-storyline`'s
-  job; switch to it when the user asks for that. When it cuts or moves an entry that has an id,
-  delete or move that slide here (`delete_slide`, `move_slide`) once the user confirms; after a
-  delete, remove the cut entry (its Note says "To delete").
-
-## The render-check-review loop
-
-Each round: apply → `pptx check` → `pptx render` → view the PNG with your image-viewing tool →
-go through [review-checklist.md](references/review-checklist.md) → write the next change set.
-
-- `check` exits with 1 when it finds errors: text overflow, a shape off the slide, leftover
-  template text, a font below the minimum. Fix every error before you show the slide. Fix
-  warnings too, or say why one stays.
-- `check` measures text with the real font. A PowerPoint render shows the slide as PowerPoint
-  draws it; a LibreOffice render can break lines slightly differently. Leave slack: a box that is
-  filled to the last line in a LibreOffice render may overflow in PowerPoint.
-- **At most three rounds** of self-correction. Then show the slide anyway and list what remains.
-
-## Show and wait
-
-Report in this order, then stop:
-
-1. the PNG path (on macOS you may `open` it),
-2. one line on what the slide argues and how it shows it,
-3. open findings: warnings you kept and why, anything unresolved after three rounds, a fallback font.
-
-## Feedback by screenshot
-
-The user sends a screenshot of a slide (from your render or from PowerPoint, marked up or not)
-and says what bothers them.
-
-1. **Find the slide:** the slide number in the footer, or the title text matched against
-   `pptx inventory`. Ask when it is ambiguous.
-2. **Map each complaint to shapes** in the inventory, by name, position (boxes are in cm from the
-   top-left corner) and text.
-3. **Change those shapes** with a change set, then check, render and review as usual. Compare the
-   new render with the screenshot side by side before you show it.
-
-If the screenshot shows a slide that is not in the working copy, ask for the deck it comes from and
-import the slide with `clone_slide` (`"from": {"deck": "<their-deck.pptx>", "slide": N}`), then
-change it as asked. Without that deck, build a new native slide modeled on it: structure from the
-screenshot, style from the brief. Never insert the screenshot as a picture.
-
-## Getting slides back
-
-- The working copy is a normal `.pptx`. The user opens it in PowerPoint and copies approved slides
-  into their own deck; you never write to the user's original.
-- If the user edits the working copy in PowerPoint, they save before asking you to continue and
-  reload after you write. When `apply` notes that the file changed outside the agent, those are
-  hand edits: read the new inventory and keep them.
-- **Lock file:** before you apply, look for `~$<slug>.pptx` in the deck folder (`ls decks/<slug>`).
-  It means the deck is open in PowerPoint. Say so before you write: PowerPoint will not show your
-  change until the user reloads, and saving from PowerPoint afterwards would overwrite it.
-- **Slides edited in the user's own deck** come back with `replace_slide`, which keeps position,
-  slide id, storyline and change log. Match each edited slide to its older version by title
-  (`pptx inventory <their-deck.pptx>` next to the working copy's inventory) and ask when unsure;
-  then replace it, `"from": {"deck": "<their-deck.pptx>", "slide": N}`. Their text is real
-  content, never example text. To start over from their deck instead:
-  `pptx init decks/<new-slug> --from <their-deck.pptx> --keep-slides`, then copy `storyline.md`
-  across and let `deck-storyline` re-link its entries: the slide ids in their deck differ.
-
-## The design method
-
-### Content
-
-1. **One message per slide.** The action title states it as a full sentence, or two short ones,
-   in at most two lines at title size. If the title cannot be written, the slide is not ready.
-2. **Kicker** = a short label for the slide's role or chapter ("Classification"), not a sentence.
-3. **The body proves the title.** Whatever does not support it goes to the notes or another slide.
-4. **The structure carries the meaning.** Pick the form from the argument: matrix for two
-   dimensions, process for a sequence, comparison for alternatives, timeline for time, tiles for
-   parallel facts, chart for numbers, table for lookup ([visual-forms.md](references/visual-forms.md)).
-5. **Little text, structured. Non-negotiable.** A label plus one short line; a bold lead-in
-   followed by plain text; no paragraph longer than three lines; no bullet walls. Detail goes into
-   the speaker notes (op `set_notes`).
-6. **Concrete over abstract.** Examples ("e.g. implement and test a requirement"), not buzzwords.
-
-### Visual
-
-7. **Use the master.** Layout placeholders for kicker, title, footer and number; free shapes only
-   inside the content area. Kicker and title come empty from the layout; fill them with `set_text`.
-   Footer, slide number and date come from the layout with their text and fields; leave them.
-8. **Align to the grid.** Edges line up, gutters are equal, equal roles get equal sizes. Take boxes
-   from `pptx grid`; never estimate them.
-9. **Color has meaning.** Theme colors only. One color family for value and emphasis, neutral
-   fills for structure, a highlight color at most once or twice per slide, and the same meaning in
-   the same color across the deck.
-10. **Hierarchy through weight and size**, with few sizes per slide (title plus one or two body
-    sizes), none below the brief's minimum.
-11. **Native and editable.** No pictures of text, diagrams or tables.
-12. **Consistent across slides.** Title position, kicker use and footer stay the same.
-
-### Non-negotiable
-
-- **No keyword chains.** Never join items with " · ", " | " or " • " ("Speed · Quality · Scale").
-  Give each item its own shape or line with a bold lead-in and a plain explanation, or cut it.
-- **Little text.** Labels plus one short line, at most three lines per paragraph, details to the
-  notes. When text does not fit, cut it or split the slide; never shrink the font to make it fit.
-
-### Anti-patterns
-
-- keyword chains joined by " · ", " | " or " • "
-- too much text: long paragraphs, bullet walls, a font shrunk to make it fit
-- topic titles ("Overview", "Background") instead of statements
-- decoration without meaning: icons, gradients, shadows, colors the master does not use
-- everything in identical cards with no hierarchy
-- a "key takeaway" box that repeats the title
-- elements almost aligned; uneven gaps
-- free text boxes where the layout has a placeholder
-
-## Building with change sets
-
-| Mistake | Instead |
-|---|---|
-| Added shape with text but no `font`: it gets the master's default text (often 18 pt, centered) | Give every text shape `font` (size, color), `align`, `anchor` and `insets` |
-| `textbox` for a block of text: it grows with its text instead of overflowing (`check` warns `grows-to-fit`) | `rect` with `"fill": "none", "line": "none"`, whose overflow `check` reports |
-| Fill or line left out, expecting a default look | Added shapes have no fill and no line until you set them |
-| Boxes estimated by eye | `pptx grid decks/<slug> --cols C --rows R`, then copy the boxes |
-| Title or kicker as a free text box | `set_text` with `{"role": "title"}` or `{"role": "kicker"}` |
-| Generic names like `Rectangle 5` | Names that say what the shape is: `matrix-cell-r2-c3`, `axis-autonomy` |
-| python-pptx code or XML edits | Change sets only; `apply` keeps a snapshot and a log |
-
-## Red flags: stop and correct
-
-- You are about to show a slide whose PNG you have not viewed.
-- A cell is getting a third line, or a list of items joined by separators.
-- You are designing the next slide before the user reacted to this one.
-- The title is a topic ("Market overview"), not a statement.
-- You are about to delete and rebuild a slide to change it.
+- **Read the file first**: `pptx inventory decks/<slug>/<slug>.pptx --slides N` lists shapes with names,
+  boxes (cm from the top-left corner) and texts. The user may have edited the deck in PowerPoint; keep
+  those edits. A `~$<slug>.pptx` next to it means the deck is open there: ask the user to save before
+  you build and to reload afterwards.
+- **Text or screenshot**: find the slide (number, title), map each complaint to shapes and change those.
+  Compare the new render with the screenshot before you show it.
+- **"More like this"** (screenshots, example slides): take over palette, fonts, forms and density. For a
+  deck the user gives, `clone_slide` from its path or add it with `pptx init decks/<slug> --reuse --examples <deck.pptx>`.
+- Change a slide through its shapes; for a variant, `clone_slide` from `"self"`. Do not delete and rebuild
+  a slide the user may have edited. Every step's previous state is in `decks/<slug>/snapshots/NNN.pptx`.
+- Slides the user edited in their own deck come back with `replace_slide` (same position and id).
 
 ## References
 
-- [changeset-format.md](references/changeset-format.md): every op with examples, colors, units, slide and shape refs.
-- [visual-forms.md](references/visual-forms.md): which form for which argument, with `pptx grid` recipes and change-set skeletons.
-- [review-checklist.md](references/review-checklist.md): the visual review for every round.
+- [changeset-format.md](references/changeset-format.md): ops, defaults, colors, refs, with examples.
+- [scripts.md](references/scripts.md): the script contract, helpers and examples.
+- [visual-forms.md](references/visual-forms.md): ideas for forms and bold moves.
+- [review-checklist.md](references/review-checklist.md): what to look for in the render.
+- [style-file.md](references/style-file.md): colors, fonts and check thresholds as a JSON file.

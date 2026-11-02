@@ -55,6 +55,7 @@ def test_frontmatter_and_length():
         assert set(fm) == {"name", "description"} and fm["name"] == md.parent.name, md
         assert len(fm["description"]) <= 1024, md
         assert len(md.read_text(encoding="utf-8").splitlines()) < 300, md
+    assert len((ROOT / "skills/slide-design/SKILL.md").read_text(encoding="utf-8").splitlines()) <= 150
 
 
 def test_commands_in_skills_exist():
@@ -66,7 +67,7 @@ def test_commands_in_skills_exist():
 def test_slide_design_teaches_every_command():
     folder = ROOT / "skills" / "slide-design"
     used = set().union(*(code_commands(md.read_text(encoding="utf-8")) for md in [folder / "SKILL.md", *folder.glob("references/*.md")]))
-    assert used >= {"init", "style", "inventory", "apply", "grid", "render", "check", "doctor"}
+    assert used >= {"init", "theme", "build", "exec", "style", "inventory", "apply", "grid", "render", "check", "doctor"}
 
 
 STORYLINE_FORMAT = ROOT / "skills" / "deck-storyline" / "references" / "storyline-format.md"
@@ -210,4 +211,49 @@ def test_setup_docs_cover_uv_the_plugin_folder_and_the_first_run():
     for name, text in (("README.md", readme), ("SKILL.md", skill)):
         for needle in ("brew install uv", "astral.sh/uv/install.sh", "plugins/cache", "network"):
             assert needle in text, f"{name} lacks {needle!r}"
-    assert "slide size" not in readme and "Without any source" not in readme  # init needs --from or --style-file
+    for needle in ("pptx init decks/<slug>`", "pptx theme", "pptx build", "pptx exec", "--strict", "--sheets"):
+        assert needle in readme, f"README.md lacks {needle!r}"
+
+
+def _python_examples(text: str) -> list[str]:
+    return [block for tag, block in _BLOCK.findall(text) if tag.strip() == "python"]
+
+
+def test_script_examples_run(tmp_path):
+    """Every python example in scripts.md runs through `pptx exec` on a neutral deck, in order, without errors."""
+    from pptx_skills.checks import run_checks
+    from pptx_skills.deckdir import init_deck
+    from pptx_skills.scripting import run_script
+
+    blocks = _python_examples((ROOT / "skills/slide-design/references/scripts.md").read_text(encoding="utf-8"))
+    assert len(blocks) >= 2
+    init_deck(tmp_path / "decks/s", None)
+    deck = tmp_path / "decks/s/s.pptx"
+    for n, block in enumerate(blocks, 1):
+        script = tmp_path / f"example-{n}.py"
+        script.write_text(block, encoding="utf-8")
+        assert run_script(deck, script)["touched"], f"example {n} changed nothing"
+    report = run_checks(deck, all_slides=True)
+    assert report["summary"]["error"] == 0, report["findings"]
+
+
+def test_self_contained_examples_build_without_errors(tmp_path):
+    """Example change sets that create their own slide apply to a neutral deck and pass the default check."""
+    from pptx_skills.changeset import apply_changeset
+    from pptx_skills.checks import run_checks
+    from pptx_skills.deckdir import init_deck
+
+    init_deck(tmp_path / "decks/x", None)
+    deck = tmp_path / "decks/x/x.pptx"
+    built = 0
+    for md in DOCS:
+        for changeset in _changesets(md.read_text(encoding="utf-8")):
+            ops = changeset["ops"]
+            if ops[0]["op"] != "add_slide" or any(o.get("slide", "$last") != "$last" for o in ops):
+                continue
+            ops = [dict(o, layout="Title Only") if o["op"] == "add_slide" else o for o in ops]  # the neutral layout names
+            apply_changeset(deck, {"ops": ops})
+            report = run_checks(deck)
+            assert report["summary"]["error"] == 0 and report["summary"]["warning"] == 0, (md.name, changeset.get("label"), report["findings"])
+            built += 1
+    assert built >= 4
