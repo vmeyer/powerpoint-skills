@@ -1,6 +1,6 @@
 {
   "name": "powerpoint-skills",
-  "description": "Create, edit and check PowerPoint decks in the style of an existing master: the agent writes a YAML spec, a shared Python engine builds native, editable slides, and every deck is rendered to PNG and checked before delivery.",
+  "description": "Design PowerPoint slides one at a time in the style of any master or deck: a storyline first, then each slide built natively in a working copy, rendered to PNG and checked before you see it.",
   "version": "1.0.0",
   "author": {
     "name": "Volker Meyer"

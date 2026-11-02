@@ -12,3 +12,13 @@ __pycache__/
 *.ppt
 *.odp
 decks/
+
+# Render output next to a corporate deck (e.g. <deck>-render/) and loose images in the
+# repo root must never be committable either.
+*-render/
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
+/*.pdf
