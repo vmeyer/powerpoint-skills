@@ -4,7 +4,6 @@ import plistlib
 import re
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -321,7 +320,8 @@ def fake_powerpoint(monkeypatch, tmp_path):
     """An installed PowerPoint (version 16.99) driven by a fake osascript; LibreOffice is missing unless a test adds it.
 
     `state.behavior` decides what an export does: "ok" writes the PDF, "fail" exits 1 as an Automation denial does,
-    "timeout" never answers, "silent" exits 0 without a PDF. Every export records the copy PowerPoint was given.
+    "cancel" exits 1 as a cancelled dialog does, "timeout" never answers, "silent" exits 0 without a PDF. Every
+    export records the copy PowerPoint was given and, like PowerPoint, leaves an owner file `~$<copy>` next to it.
     """
     app = tmp_path / "Applications/Microsoft PowerPoint.app"
     (app / "Contents").mkdir(parents=True)
@@ -341,10 +341,13 @@ def fake_powerpoint(monkeypatch, tmp_path):
             copy, pdf, stem = Path(args[0]), Path(args[1]), args[2]
             shown = [slide._element.get("show") for slide in Presentation(str(copy)).slides]
             state.exports.append({"copy": copy, "pdf": pdf, "stem": stem, "script": script, "shown": shown, "timeout": kwargs.get("timeout")})
+            (copy.parent / f"~${copy.name}").write_bytes(b"owner")
             if state.behavior == "timeout":
                 raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
             if state.behavior == "fail":
                 return subprocess.CompletedProcess(cmd, 1, "", "execution error: Not authorized to send Apple events to Microsoft PowerPoint. (-1743)")
+            if state.behavior == "cancel":
+                return subprocess.CompletedProcess(cmd, 1, "", "execution error: Microsoft PowerPoint got an error: User canceled. (-128)")
             if state.behavior == "ok":
                 shutil.copyfile(copy, pdf)
             return subprocess.CompletedProcess(cmd, 0, "", "")
@@ -363,6 +366,20 @@ def fake_powerpoint(monkeypatch, tmp_path):
 
 def with_libreoffice(monkeypatch):
     monkeypatch.setattr(render_mod, "find_soffice", lambda: Path("/x/soffice"))
+
+
+def hidden_entries(folder):
+    return [p for p in Path(folder).rglob(".*")]
+
+
+def assert_empty_export_folder(folder):
+    """PowerPoint's exchange folder `<folder>/_export` stays (its one-time grant keeps working) and is empty again."""
+    export = Path(folder) / "_export"
+    assert export.is_dir() and list(export.iterdir()) == []
+
+
+def export_folders(state) -> set:
+    return {export["copy"].parent.resolve() for export in state.exports}
 
 
 def test_auto_prefers_powerpoint_then_libreoffice(fake_powerpoint, monkeypatch):
@@ -410,8 +427,8 @@ def test_powerpoint_renders_an_unhidden_copy_inside_the_output_folder(fake_power
     files = render(deck, out, dpi=77)
     assert [p.name for p in files] == ["slide-01.png", "slide-02.png", "slide-03.png"]
     (export,) = fake_powerpoint.exports
-    # PowerPoint may write only into folders the user granted, so the exchange folder sits in the output folder
-    assert export["copy"].parent.parent == out and export["copy"].parent.name.startswith(".pptx-render-")
+    # PowerPoint writes only into the exact folders the user granted: one fixed, visible `_export` next to the deck
+    assert export["copy"].parent == deck.parent / "_export"
     assert re.fullmatch(r"render-[0-9a-f]{32}", export["stem"]) and export["copy"].name == f"{export['stem']}.pptx"
     assert export["pdf"].parent == export["copy"].parent
     assert export["shown"] == [None, None, None]  # PowerPoint's PDF would leave the hidden slide 2 out
@@ -419,6 +436,8 @@ def test_powerpoint_renders_an_unhidden_copy_inside_the_output_folder(fake_power
     assert export["timeout"] == 120
     assert [cmd[cmd.index("-r") + 1] for cmd in fake_powerpoint.pdftoppm] == ["77"] * 3
     assert sorted(p.name for p in out.iterdir()) == ["slide-01.png", "slide-02.png", "slide-03.png"]
+    assert_empty_export_folder(deck.parent)
+    assert hidden_entries(tmp_path) == []
     assert fake_powerpoint.closes == [] and fake_powerpoint.soffice == []
 
 
@@ -427,22 +446,34 @@ def test_powerpoint_copies_are_unique_and_the_scripts_touch_nothing_else(fake_po
     render(deck_with_two_slides, tmp_path / "out", slides=[2])
     first, second = fake_powerpoint.exports
     assert first["stem"] != second["stem"]
+    assert first["copy"].parent == second["copy"].parent == tmp_path / "_export"  # one folder, granted once
+    assert_empty_export_folder(tmp_path)
     assert first["script"] == render_mod._EXPORT_SCRIPT and str(first["copy"]) not in first["script"]  # paths are arguments
     for script in (render_mod._EXPORT_SCRIPT, render_mod._CLOSE_SCRIPT):
         assert "quit" not in script and "active presentation" not in script
     assert "is running" in render_mod._CLOSE_SCRIPT  # cleaning up never launches PowerPoint
 
 
-@pytest.mark.parametrize("behavior, reason", [("fail", "-1743"), ("timeout", "timed out after 120 s"), ("silent", "no PDF")])
-def test_powerpoint_failure_without_libreoffice_explains_the_setup(fake_powerpoint, deck_with_two_slides, tmp_path, behavior, reason):
+_AUTOMATION = ("Privacy & Security → Automation",)
+_GRANT = ('"Grant Access" dialog for {export}', 'click "Grant Access"', "once per project", "fall back to LibreOffice in auto mode")
+
+
+@pytest.mark.parametrize("behavior, needles", [
+    ("fail", ("-1743", *_AUTOMATION)),
+    ("timeout", ("within 120 s", "probably showing", *_GRANT)),
+    ("silent", ("no PDF", *_GRANT)),
+    ("cancel", ("-128", *_AUTOMATION, *_GRANT)),
+])
+def test_powerpoint_failure_without_libreoffice_explains_the_setup(fake_powerpoint, deck_with_two_slides, tmp_path, behavior, needles):
     fake_powerpoint.behavior = behavior
     out = tmp_path / "out"
     with pytest.raises(PptxSkillsError) as exc:
         render(deck_with_two_slides, out)
     message = str(exc.value)
-    for needle in (reason, "Privacy & Security → Automation", "Grant Access", "~/projects", "dialog"):
-        assert needle in message
-    assert list(out.iterdir()) == []  # the exchange folder is gone
+    for needle in needles:
+        assert needle.format(export=tmp_path / "_export") in message
+    assert list(out.iterdir()) == []
+    assert_empty_export_folder(tmp_path)  # copy, owner file and PDF are gone, the folder stays
     assert fake_powerpoint.closes == [fake_powerpoint.exports[0]["stem"]]  # only the copy is closed
 
 
@@ -455,15 +486,16 @@ def test_powerpoint_failure_falls_back_to_libreoffice_with_a_note(fake_powerpoin
     assert [p.name for p in files] == ["slide-01.png", "slide-02.png"] and len(fake_powerpoint.soffice) == 1
     assert len(notes) == 1 and "PowerPoint" in notes[0] and "LibreOffice" in notes[0] and "pptx doctor" in notes[0]
     assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["slide-01.png", "slide-02.png"]
+    assert_empty_export_folder(tmp_path)
 
 
 def test_a_forced_powerpoint_does_not_fall_back(fake_powerpoint, monkeypatch, deck_with_two_slides, tmp_path):
     with_libreoffice(monkeypatch)
     fake_powerpoint.behavior = "fail"
-    with pytest.raises(PptxSkillsError, match="Grant Access"):
+    with pytest.raises(PptxSkillsError, match="Automation"):
         render(deck_with_two_slides, tmp_path / "out", renderer="powerpoint")
     monkeypatch.setenv("PPTX_SKILLS_RENDERER", "powerpoint")
-    with pytest.raises(PptxSkillsError, match="Grant Access"):
+    with pytest.raises(PptxSkillsError, match="Automation"):
         render(deck_with_two_slides, tmp_path / "out")
     assert fake_powerpoint.soffice == []
 
@@ -482,13 +514,28 @@ def test_cli_render_takes_a_renderer_and_reports_the_fallback(fake_powerpoint, m
     assert main(["render", str(deck_with_two_slides), "--renderer", "keynote"]) == 2
 
 
-def test_contact_sheets_render_next_to_the_sheet(fake_powerpoint, deck_with_two_slides, tmp_path):
-    style = tmp_path / "style"
+def test_contact_sheets_use_the_export_folder_next_to_the_deck(fake_powerpoint, deck_with_two_slides, tmp_path):
+    style = tmp_path / "sheets"
     render_layouts(deck_with_two_slides, style / "layouts.png")
     render_examples(deck_with_two_slides, style / "examples.png")
-    assert len(fake_powerpoint.exports) == 2
-    assert all(style in export["copy"].parents for export in fake_powerpoint.exports)
-    assert sorted(p.name for p in style.iterdir()) == ["examples.png", "layouts.png"]  # no temporary folder left
+    assert [export["copy"].parent for export in fake_powerpoint.exports] == [tmp_path / "_export"] * 2
+    assert sorted(p.name for p in style.iterdir()) == ["examples.png", "layouts.png"]
+    assert_empty_export_folder(tmp_path)
+    assert hidden_entries(tmp_path) == []
+
+
+def test_one_export_folder_per_project(fake_powerpoint, tmp_path, default_pptx, examples_deck):
+    """Every new folder costs the user a "Grant Access" dialog, so all decks and their sheets share decks/_export."""
+    decks = tmp_path / "decks"
+    init_deck(decks / "a", default_pptx, examples_deck)  # layouts and examples sheets, rendered while staging
+    init_deck(decks / "b", default_pptx)
+    render(decks / "a/a.pptx")
+    assert main(["style", str(decks / "b"), "--refresh"]) == 0
+    assert len(fake_powerpoint.exports) == 5
+    assert export_folders(fake_powerpoint) == {(decks / "_export").resolve()}
+    assert sorted(p.name for p in decks.iterdir()) == ["_export", "a", "b"]
+    assert_empty_export_folder(decks)
+    assert hidden_entries(decks) == []
 
 
 def test_style_takes_a_renderer_and_reports_the_fallback(fake_powerpoint, monkeypatch, tmp_path, default_pptx, capsys):
@@ -510,6 +557,8 @@ def test_init_survives_a_failing_powerpoint(fake_powerpoint, tmp_path, default_p
     assert main(["init", str(tmp_path / "d"), "--from", str(default_pptx)]) == 0
     assert "contact sheets skipped: PowerPoint could not export" in capsys.readouterr().out
     assert sorted(p.name for p in (tmp_path / "d/style").iterdir()) == ["brief.json", "brief.md"]
+    assert_empty_export_folder(tmp_path)
+    assert hidden_entries(tmp_path) == []  # nor is the init staging folder left
 
 
 def test_init_survives_an_unknown_renderer_in_the_environment(monkeypatch, tmp_path, default_pptx, capsys):
@@ -559,20 +608,26 @@ def _open_presentations() -> str:
 def test_render_real_powerpoint(make_deck):
     if render_mod.find_powerpoint() is None or find_pdftoppm() is None:
         pytest.skip("PowerPoint or poppler not installed")
-    deck = hidden_deck(make_deck)
     before = _open_presentations()
-    # PowerPoint writes only into folders the user granted, e.g. the projects folder that holds this repo
-    root = Path(tempfile.mkdtemp(prefix=".real-powerpoint-", suffix="-render", dir=Path(__file__).resolve().parent))
+    # PowerPoint writes only into the exact folders the user granted. This folder (git-ignored) holds the deck, so
+    # its exchange folder is real-powerpoint-render/_export: one grant ever, as both stay between runs.
+    root = Path(__file__).resolve().parent / "real-powerpoint-render"
+    root.mkdir(exist_ok=True)
     try:
-        out = render(deck, root / "all", dpi=20, renderer="powerpoint")
+        deck = Path(shutil.copy(hidden_deck(make_deck), root / "hidden.pptx"))
+        out = render(deck, root / "slides", dpi=20, renderer="powerpoint")
         assert [p.name for p in out] == ["slide-01.png", "slide-02.png", "slide-03.png"]
         colors = []
         for path in out:
             with Image.open(path) as image:
                 colors.append(image.convert("RGB").getpixel((image.width // 2, image.height // 2)))
-        assert colors == [(255, 0, 0), (0, 255, 0), (0, 0, 255)]  # page n is slide n, hidden or not
-        assert render_layouts(deck, root / "style/layouts.png", renderer="powerpoint").is_file()
-        assert not [p for p in root.rglob(".pptx-*")]
+        expected = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]  # page n is slide n, hidden or not
+        assert all(abs(c - e) <= 8 for got, want in zip(colors, expected) for c, e in zip(got, want)), colors
+        assert render_layouts(deck, root / "layouts.png", renderer="powerpoint").is_file()
+        assert_empty_export_folder(root)
+        assert hidden_entries(root) == []
     finally:
-        shutil.rmtree(root, ignore_errors=True)
+        for item in root.iterdir():
+            if item.name != "_export":
+                shutil.rmtree(item) if item.is_dir() else item.unlink()
     assert _open_presentations() == before  # the user's presentations stay as they were, no copy is left open

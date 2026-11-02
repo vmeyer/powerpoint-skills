@@ -3,6 +3,7 @@
 import hashlib
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -43,12 +44,25 @@ _INSTALL_HINT = (
     "admin rights) and `brew install poppler`, or `apt install libreoffice poppler-utils`"
 )
 _POPPLER_HINT = "install poppler: `brew install poppler` or `apt install poppler-utils`"
-_POWERPOINT_SETUP = (
-    "PowerPoint needs a one-time setup: allow the app that runs `pptx` (your terminal or agent) to control "
-    "Microsoft PowerPoint under System Settings → Privacy & Security → Automation, and when PowerPoint asks for "
-    'access on the first export, choose "Grant Access" for a folder that holds your decks and their render folders '
-    "(e.g. ~/projects), since PowerPoint writes only inside folders granted this way"
+# PowerPoint writes only into folders granted one by one in its "Grant Access" dialog (a parent's grant does not
+# count), so all renders of a project share one fixed, visible exchange folder, `decks/_export`.
+EXPORT_FOLDER = "_export"
+_AUTOMATION_HINT = (
+    "allow the app that runs `pptx` (your terminal or agent) to control Microsoft PowerPoint under "
+    "System Settings → Privacy & Security → Automation"
 )
+_CANCEL = '"Cancel" makes `pptx` fall back to LibreOffice in auto mode, where LibreOffice is installed'
+_POWERPOINT_SETUP = (
+    f"PowerPoint needs a one-time setup: {_AUTOMATION_HINT}; and the first PowerPoint export in a project shows "
+    f'one "Grant Access" dialog for `decks/{EXPORT_FOLDER}` (for a deck outside a deck folder: `{EXPORT_FOLDER}` '
+    f'next to it), so click "Grant Access" once. {_CANCEL}'
+)
+
+
+def _grant_hint(exchange: Path) -> str:
+    return (f'PowerPoint is probably showing a "Grant Access" dialog for {exchange}: click "Grant Access" '
+            f"(it is asked once per project), then run the command again; {_CANCEL}")
+_DENIED = re.compile(r"-1743|not authori[sz]ed|not allowed to send", re.I)
 # The copy is opened, exported and closed by its unique name; the user's own presentations are never addressed,
 # PowerPoint is never quit, and the paths arrive as arguments rather than as script text.
 _EXPORT_SCRIPT = """on run argv
@@ -95,7 +109,11 @@ EXAMPLES_SHEET = "examples.png"
 
 
 class _PowerPointFailed(Exception):
-    """PowerPoint produced no PDF; the message says why."""
+    """PowerPoint produced no PDF; the message says why, `hint` what the user can do about it."""
+
+    def __init__(self, reason: str, hint: str = _POWERPOINT_SETUP):
+        super().__init__(reason)
+        self.hint = hint
 
 
 def find_soffice() -> Path | None:
@@ -189,19 +207,19 @@ def _libreoffice_pdf(soffice: Path, deck: Path, tmp: Path) -> Path:
     return pdf
 
 
-def _powerpoint_pdf(prs, out_dir: Path, pdf: Path) -> Path:
+def _powerpoint_pdf(prs, exchange: Path, pdf: Path) -> Path:
     """Export `prs` to `pdf` through PowerPoint; raises _PowerPointFailed.
 
-    PowerPoint is sandboxed: it writes only into folders the user granted, so the exchange folder sits inside
-    `out_dir`, next to the user's own files. It holds a copy with a unique name and every slide shown (PowerPoint
-    leaves hidden slides out of a PDF, so page n would no longer be slide n), and is always removed.
+    PowerPoint is sandboxed: it writes only into folders the user granted one by one, so `exchange` is the
+    project's fixed `_export` folder (see default_export_dir), kept between runs. It receives a copy with a unique
+    name and every slide shown (PowerPoint leaves hidden slides out of a PDF, so page n would no longer be slide n);
+    the files of this run (copy, PowerPoint's owner file, PDF) are always removed, other files stay.
     """
     stem = f"render-{uuid.uuid4().hex}"
-    exchange = out_dir / f".pptx-{stem}"
     try:
-        exchange.mkdir()
+        exchange.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        raise _PowerPointFailed(f"cannot create {exchange}: {exc}") from exc
+        raise _PowerPointFailed(f"cannot create {exchange}: {exc}", "check that the output folder is writable") from exc
     started = done = False
     try:
         for slide in prs.slides:
@@ -215,12 +233,17 @@ def _powerpoint_pdf(prs, out_dir: Path, pdf: Path) -> Path:
                 capture_output=True, text=True, errors="replace", timeout=_POWERPOINT_TIMEOUT_S,
             )
         except subprocess.TimeoutExpired as exc:
-            raise _PowerPointFailed(f"timed out after {_POWERPOINT_TIMEOUT_S} s") from exc
+            raise _PowerPointFailed(f"PowerPoint did not answer within {_POWERPOINT_TIMEOUT_S} s",
+                                    _grant_hint(exchange)) from exc
         if result.returncode != 0:
             tail = (result.stderr or result.stdout or "").strip()[-400:]
-            raise _PowerPointFailed(f"osascript failed (exit {result.returncode}): {tail}")
+            if _DENIED.search(tail):
+                hint = f"To fix it, {_AUTOMATION_HINT}, then run the command again"
+            else:
+                hint = f"Check the Automation permission ({_AUTOMATION_HINT}). {_grant_hint(exchange)}"
+            raise _PowerPointFailed(f"osascript failed (exit {result.returncode}): {tail}", hint)
         if not exported.is_file() or exported.stat().st_size == 0:
-            raise _PowerPointFailed("PowerPoint wrote no PDF")
+            raise _PowerPointFailed(f"PowerPoint wrote no PDF into {exchange}", _grant_hint(exchange))
         shutil.move(str(exported), str(pdf))
         done = True
         return pdf
@@ -229,7 +252,11 @@ def _powerpoint_pdf(prs, out_dir: Path, pdf: Path) -> Path:
     finally:
         if started and not done:
             _close_quietly(stem)
-        shutil.rmtree(exchange, ignore_errors=True)
+        for leftover in exchange.glob(f"*{stem}*"):  # the copy, PowerPoint's ~$ owner file, the PDF
+            try:
+                leftover.unlink()
+            except OSError:
+                pass
 
 
 def _close_quietly(stem: str) -> None:
@@ -241,14 +268,27 @@ def _close_quietly(stem: str) -> None:
         pass
 
 
-def default_out_dir(deck: Path) -> Path:
+def _deck_dir_of_working_copy(deck: Path) -> Path | None:
     from .deckdir import find_deck_dir, load_deck
 
-    deck = Path(deck)
     deck_dir = find_deck_dir(deck)
-    if deck_dir is not None and load_deck(deck_dir)["working_copy"] == deck.name:
-        return deck_dir / "render"
-    return deck.parent / f"{deck.stem}-render"
+    if deck_dir is not None and load_deck(deck_dir)["working_copy"] == Path(deck).name:
+        return deck_dir
+    return None
+
+
+def default_out_dir(deck: Path) -> Path:
+    deck = Path(deck)
+    deck_dir = _deck_dir_of_working_copy(deck)
+    return deck_dir / "render" if deck_dir is not None else deck.parent / f"{deck.stem}-render"
+
+
+def default_export_dir(deck: Path) -> Path:
+    """PowerPoint's exchange folder: `decks/_export` for a deck folder's working copy, shared by every deck of the
+    project and their contact sheets, else `_export` next to the deck. One folder means one "Grant Access"."""
+    deck = Path(deck)
+    deck_dir = _deck_dir_of_working_copy(deck)
+    return (deck_dir.parent if deck_dir is not None else deck.parent) / EXPORT_FOLDER
 
 
 def render(
@@ -258,11 +298,13 @@ def render(
     dpi: int = 120,
     renderer: str | None = None,
     notes: list[str] | None = None,
+    export_dir: Path | None = None,
 ) -> list[Path]:
     """Render the given slides (1-based, default all) to `slide-NN.png` in `out_dir`; returns the files.
 
     `renderer` is auto, powerpoint or libreoffice (default: PPTX_SKILLS_RENDERER, else auto). When auto picked
     PowerPoint and it fails, LibreOffice renders instead and a message for the user is appended to `notes`.
+    PowerPoint exchanges files through `export_dir`, default `default_export_dir(deck)`.
     """
     deck = Path(deck)
     prs = open_presentation(deck)  # also validates the file
@@ -282,11 +324,10 @@ def render(
         pdf = None
         if chosen == "powerpoint":
             try:
-                pdf = _powerpoint_pdf(prs, out_dir, tmp / "deck.pdf")
+                pdf = _powerpoint_pdf(prs, Path(export_dir or default_export_dir(deck)), tmp / "deck.pdf")
             except _PowerPointFailed as exc:
                 if want == "powerpoint" or find_soffice() is None:
-                    raise PptxSkillsError(f"PowerPoint could not export {deck.name} to PDF: {exc}. {_POWERPOINT_SETUP}. "
-                                          "A dialog may be waiting in PowerPoint.") from exc
+                    raise PptxSkillsError(f"PowerPoint could not export {deck.name} to PDF: {exc}. {exc.hint}.") from exc
                 if notes is not None:
                     notes.append(f"PowerPoint could not render ({exc}), so LibreOffice did; "
                                  "`pptx doctor` shows PowerPoint's one-time setup")
@@ -349,17 +390,12 @@ def render_slide_sheet(pngs: list[Path], slide_numbers: list[int], out: Path) ->
     return contact_sheet(pngs, [f"Slide {n}" for n in slide_numbers], out)
 
 
-def _scratch_beside(out: Path, what: str) -> tempfile.TemporaryDirectory:
-    """A temporary folder next to `out`: PowerPoint writes only where the user granted access, as for `out` itself."""
-    try:
-        out.parent.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise PptxSkillsError(f"cannot create folder {out.parent}: {exc}") from exc
-    return tempfile.TemporaryDirectory(prefix=f".pptx-{what}-", dir=out.parent)
+def render_layouts(
+    deck: Path, out: Path, renderer: str | None = None, notes: list[str] | None = None, export_dir: Path | None = None
+) -> Path:
+    """One slide per layout of `deck` (placeholders filled with their role name), labeled with the layout name.
 
-
-def render_layouts(deck: Path, out: Path, renderer: str | None = None, notes: list[str] | None = None) -> Path:
-    """One slide per layout of `deck` (placeholders filled with their role name), labeled with the layout name."""
+    PowerPoint exchanges files through `export_dir`, default `default_export_dir(deck)`."""
     out = Path(out)
     prs = open_presentation(deck)
     delete_all_slides(prs)
@@ -372,17 +408,21 @@ def render_layouts(deck: Path, out: Path, renderer: str | None = None, notes: li
             role = roles.get(ph.placeholder_format.idx, "other")
             if role != "picture" and ph.has_text_frame:
                 ph.text_frame.text = role
-    with _scratch_beside(out, "layouts") as tmp_name:
+    with tempfile.TemporaryDirectory(prefix="pptx-layouts-") as tmp_name:
         tmp = Path(tmp_name)
         save_presentation(prs, tmp / "layouts.pptx")
-        pngs = render(tmp / "layouts.pptx", tmp / "png", dpi=60, renderer=renderer, notes=notes)
+        pngs = render(tmp / "layouts.pptx", tmp / "png", dpi=60, renderer=renderer, notes=notes,
+                      export_dir=export_dir or default_export_dir(deck))
         return contact_sheet(pngs, names, out)
 
 
-def render_examples(examples: Path, out: Path, renderer: str | None = None, notes: list[str] | None = None) -> Path:
+def render_examples(
+    examples: Path, out: Path, renderer: str | None = None, notes: list[str] | None = None, export_dir: Path | None = None
+) -> Path:
     out = Path(out)
-    with _scratch_beside(out, "examples") as tmp_name:
-        pngs = render(examples, Path(tmp_name), dpi=60, renderer=renderer, notes=notes)
+    with tempfile.TemporaryDirectory(prefix="pptx-examples-") as tmp_name:
+        pngs = render(examples, Path(tmp_name), dpi=60, renderer=renderer, notes=notes,
+                      export_dir=export_dir or default_export_dir(examples))
         if not pngs:
             raise PptxSkillsError(f"{examples} has no slides to render")
         return contact_sheet(pngs, [f"Slide {i}" for i in range(1, len(pngs) + 1)], out)
@@ -412,11 +452,13 @@ def update_sheets(
     if not force and previous_hash == current and all(p.is_file() for p in wanted):
         return current, []
     notes: list[str] = []
+    # the project's decks/_export, also while init stages the deck in a temporary folder next to the deck folders
+    export_dir = deck_dir.resolve().parent / EXPORT_FOLDER
     try:
         _require_tools(renderer)
-        render_layouts(deck_dir / deck["working_copy"], style / LAYOUTS_SHEET, renderer, notes)
+        render_layouts(deck_dir / deck["working_copy"], style / LAYOUTS_SHEET, renderer, notes, export_dir)
         if examples:
-            render_examples(Path(examples), style / EXAMPLES_SHEET, renderer, notes)
+            render_examples(Path(examples), style / EXAMPLES_SHEET, renderer, notes, export_dir)
     except (PptxSkillsError, OSError) as exc:
         return None, [*dict.fromkeys(notes), f"contact sheets skipped: {exc}"]
     return current, list(dict.fromkeys(notes))
@@ -454,8 +496,7 @@ def _doctor_lines(report: dict) -> list[str]:
     if report["powerpoint"]:
         version = f" {report['powerpoint_version']}" if report["powerpoint_version"] else ""
         lines.append(f"✓ PowerPoint{version}: {report['powerpoint']}")
-        lines.append(f"  {_POWERPOINT_SETUP}. Until then a render may wait for a dialog in PowerPoint, "
-                     "fail, or fall back to LibreOffice.")
+        lines.append(f"  {_POWERPOINT_SETUP}.")
     else:
         lines.append("· PowerPoint: not found" + ("" if _MACOS else " (renders on macOS only)"))
     if report["soffice"]:

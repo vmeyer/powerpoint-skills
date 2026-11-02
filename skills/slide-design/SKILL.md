@@ -47,13 +47,12 @@ theme fonts). It names the renderer and prints install commands for whatever is 
 
 - Renders come from PowerPoint where it is installed (macOS), otherwise from LibreOffice; poppler
   is needed either way. Suggest installing LibreOffice only when `doctor` finds no PowerPoint.
-- PowerPoint needs a one-time permission on the first render: the user allows automation of
-  PowerPoint and grants it access to the folder that holds the decks. Keep renders in the deck
-  folder (the default), as PowerPoint cannot write to temporary folders. If a render waits or fails
-  with an automation or access error, ask the user to answer the dialog in PowerPoint or follow the
-  steps `doctor` prints, then render again. If PowerPoint fails and LibreOffice is installed, the
-  render falls back to it and prints a note; pass that note on. `--renderer libreoffice` on
-  `render` and `style` skips PowerPoint.
+- PowerPoint needs two one-time permissions: the user allows automation of PowerPoint, and the
+  first PowerPoint export in a project shows one "Grant Access" dialog for `decks/_export`, the
+  folder through which every deck of the project goes to PowerPoint; the user clicks "Grant Access"
+  once. If a render times out, that dialog is probably waiting: ask the user to click "Grant
+  Access", then render again. "Cancel" falls back to LibreOffice where it is installed; the render
+  then prints a note, pass it on. `--renderer libreoffice` on `render` and `style` skips PowerPoint.
 - Without a renderer or poppler there is no render: tell the user and stop. A missing theme font
   means renders and text measurement use a fallback; mention it when you show a slide.
 

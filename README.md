@@ -130,9 +130,11 @@ Set the engine up once per machine, or ask your agent: "Set up the powerpoint-sk
 
    - **Automation:** macOS asks whether your terminal (or the app your agent runs in) may control
      Microsoft PowerPoint. Allow it. The setting lives under System Settings → Privacy & Security → Automation.
-   - **Folder access:** PowerPoint is sandboxed and asks for access on its first export. Choose
-     **Grant Access** for the folder that holds your projects, e.g. `~/projects`. Renders are written into
-     the deck folder (`decks/<slug>/render/`), so PowerPoint can only render decks inside a granted folder.
+   - **Folder access:** PowerPoint is sandboxed and writes only into folders granted one by one (granting a
+     parent folder does not count). The engine therefore hands every deck of a project to PowerPoint through
+     one fixed folder, `decks/_export` (for a `.pptx` outside a deck folder: `_export` next to it). The first
+     PowerPoint export in a project shows one "Grant Access" dialog for `decks/_export`: click
+     **Grant Access** once. If you click **Cancel**, the render falls back to LibreOffice where it is installed.
 
    The engine never touches the presentations you have open and never quits PowerPoint: it opens a copy
    with a unique name, exports it to PDF and closes it again. If PowerPoint fails (for example while a
@@ -238,6 +240,7 @@ decks/<slug>/
   snapshots/NNN.pptx       # file state before each change set
   render/slide-NN.png      # latest render per slide
   check/slide-NN.json      # latest check report per slide
+decks/_export/             # PowerPoint's exchange folder, shared by all decks; empty between renders
 ```
 
 An existing `decks/<slug>/` is never overwritten silently. Masters, decks and renders are usually confidential; the `.gitignore` of this repo excludes them.
