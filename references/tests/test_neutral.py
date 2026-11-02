@@ -1,6 +1,8 @@
 import json
 
 import pytest
+from pptx import Presentation
+from pptx.oxml.ns import qn
 
 from pptx_skills.brief import build_brief
 from pptx_skills.deckdir import init_deck
@@ -20,6 +22,7 @@ def test_neutral_is_16_9_with_style():
     prs = neutral_presentation({"colors": {"accent1": "#123456"}, "fonts": {"major": "Georgia", "minor": "Verdana"}})
     b = build_brief(prs)
     assert b["slide_size_cm"] == [33.87, 19.05]
+    assert prs.part._element.find(qn("p:sldSz")).get("type") is None
     assert b["theme"]["colors"]["accent1"] == "#123456" and b["theme"]["colors"]["accent2"] == "#2E75B6"
     assert b["theme"]["colors"]["dk1"] == "#000000"
     assert b["theme"]["fonts"] == {"major": "Georgia", "minor": "Verdana"}
@@ -32,10 +35,13 @@ def test_neutral_defaults_and_layouts_scaled():
     assert prs.slide_master.part.part_related_by(
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme"
     ).blob.count(b"sysClr") == 0
-    for layout in prs.slide_layouts:
-        for ph in layout.placeholders:
-            if ph.left is not None:
-                assert ph.left + ph.width <= prs.slide_width
+    original = Presentation()
+    for layout, orig in zip(prs.slide_layouts, original.slide_layouts):
+        for ph, orig_ph in zip(layout.placeholders, orig.placeholders):
+            if orig_ph.width is not None:
+                assert ph.width == pytest.approx(orig_ph.width * 4 / 3, abs=1)
+                assert ph.left == pytest.approx(orig_ph.left * 4 / 3, abs=1)
+                assert ph.top == orig_ph.top
 
 
 def test_init_with_style_file_only(tmp_path, style_json):

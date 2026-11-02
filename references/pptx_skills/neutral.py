@@ -1,6 +1,7 @@
 """Style files and the neutral 16:9 template for decks without a PowerPoint master."""
 
 import json
+from functools import cache
 from importlib import resources
 from pathlib import Path
 
@@ -30,9 +31,14 @@ NEUTRAL_FONTS = {"major": "Arial", "minor": "Arial"}
 _WIDTH, _HEIGHT = 12192000, 6858000
 
 
+@cache
+def _schema() -> dict:
+    return json.loads(resources.files(__package__).joinpath("schemas/style-file.schema.json").read_text(encoding="utf-8"))
+
+
 def validate_style(data, where: str = "style file") -> dict:
     """Check a parsed style file against the schema; errors name the offending key."""
-    schema = json.loads(resources.files(__package__).joinpath("schemas/style-file.schema.json").read_text(encoding="utf-8"))
+    schema = _schema()
     if not isinstance(data, dict):
         raise PptxSkillsError(f"{where} must be a JSON object with the keys colors, fonts and rules")
     errors = sorted(Draft202012Validator(schema).iter_errors(data), key=lambda e: list(e.absolute_path))
@@ -91,6 +97,7 @@ def neutral_presentation(style: dict | None = None):
     style = validate_style(style or {})
     prs = Presentation()
     prs.slide_width, prs.slide_height = _WIDTH, _HEIGHT
+    prs.part._element.find(qn("p:sldSz")).attrib.pop("type", None)  # the default template says screen4x3
     _scale_x(prs)
     _style_theme(prs, {**NEUTRAL_COLORS, **style.get("colors", {})}, {**NEUTRAL_FONTS, **style.get("fonts", {})})
     return prs
