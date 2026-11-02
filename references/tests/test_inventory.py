@@ -169,6 +169,23 @@ def test_filter_markdown_and_cli(deck_with_two_slides, capsys):
     assert "## Slide 2" in out and "## Slide 1" not in out
 
 
+def test_outline(deck_with_two_slides, kicker_master, tmp_path, capsys):
+    assert main(["inventory", str(deck_with_two_slides), "--outline"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["1 (id 256) | — | First slide", "2 (id 257) | — | Second slide"]
+
+    prs = Presentation(kicker_master)
+    slide = prs.slides.add_slide(layout_named(prs, "Title Only"))
+    next(p for p in slide.placeholders if p.placeholder_format.idx == 13).text = "Classification"
+    slide.shapes.title.text_frame.text = "Two lines\nof title"
+    prs.slides.add_slide(layout_named(prs, "Blank"))  # neither title nor kicker
+    path = tmp_path / "outline.pptx"
+    prs.save(str(path))
+    assert main(["inventory", str(path), "--outline"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["1 (id 256) | Classification | Two lines of title", "2 (id 257) | — | —"]
+    assert main(["inventory", str(path), "--outline", "--slides", "2", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"slides": [{"number": 2, "id": 257, "kicker": None, "title": None}]}
+
+
 def test_cli_errors(deck_with_two_slides, capsys):
     assert main(["inventory", str(deck_with_two_slides), "--slides", "9"]) == 2
     assert "error:" in capsys.readouterr().err

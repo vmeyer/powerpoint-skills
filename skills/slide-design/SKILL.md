@@ -52,7 +52,8 @@ Every deck lives in `decks/<slug>/` in the user's project, the slug in kebab-cas
 | an existing deck to continue | `pptx init decks/<slug> --from <deck.pptx> --keep-slides` |
 | no master at all | `pptx init decks/<slug> --style-file <style.json>`: builds the deck on a neutral 16:9 template; the optional style file sets colors and fonts ([style-file.md](references/style-file.md)) |
 | any of the above, with their own check thresholds | add `--style-file <style.json>` with `rules` only |
-| a `decks/<slug>/` folder already | no init; work in it (`pptx style decks/<slug>` refreshes the brief) |
+| only a `storyline.md` in `decks/<slug>/` | `init` into that folder from the storyline's "Style sources" (`--keep-slides` when it says "keep slides"); the storyline stays |
+| a deck folder with `deck.json` already | no init; work in it (`pptx style decks/<slug>` refreshes the brief) |
 
 `init` copies the source to `decks/<slug>/<slug>.pptx`, the **working copy**; the user's own file
 is never written. It writes the style brief to `decks/<slug>/style/` and refuses a folder that
@@ -70,9 +71,10 @@ After `init`:
 ## Workflow: one slide
 
 1. **Read the state.** The brief (once per session), the slide's entry in
-   `decks/<slug>/storyline.md` if there is one, and the current slide:
-   `pptx inventory decks/<slug>/<slug>.pptx --slides N` (add `--json` for runs, fills and colors).
-   The file is the truth. The user may have changed it in PowerPoint; never work from memory.
+   `decks/<slug>/storyline.md` if there is one (see "Keeping the storyline current"), and the
+   current slide: `pptx inventory decks/<slug>/<slug>.pptx --slides N` (add `--json` for runs,
+   fills and colors). The file is the truth. The user may have changed it in PowerPoint; never
+   work from memory.
 2. **Plan the slide** in two or three lines in the conversation: the action title, the kicker,
    the visual form ([visual-forms.md](references/visual-forms.md)), the layout (a name from the
    brief; free compositions start from the layout with only kicker and title) and the grid
@@ -95,13 +97,28 @@ After `init`:
 5. **Review** the PNG and fix what is wrong (next section). At most three rounds.
 6. **Show** the slide and **wait**. Do not start another slide until the user reacts.
 7. **Revise** from feedback by going back to step 1. On approval set the storyline entry's status
-   to `approved` (if there is a storyline) and offer the next open entry.
+   to `approved` (if there is a storyline) and offer the next `open` entry.
 
 A slide can also be designed without a storyline, from a single prompt; skip the storyline parts.
 
 To change a slide, change its shapes (`set_text`, `update_shape`, `delete_shape`). Never delete
 and rebuild an existing slide: the user's hand edits would be lost. For a variant, duplicate the
 slide with `clone_slide` from `"self"` and change the copy.
+
+### Keeping the storyline current
+
+`storyline.md` is written by the `deck-storyline` skill in the format of
+[storyline-format.md](../deck-storyline/references/storyline-format.md). Here you only change an
+entry's status, id and, when the wording changed during design, its kicker and title.
+
+- An entry with an Id is an existing slide: revise it, addressing it as `"id:<Id>"` in change
+  sets. Its current number, for `check` and `render`, is in
+  `pptx inventory decks/<slug>/<slug>.pptx --outline`. An entry without an Id is a new slide.
+- Set the entry to `in design` when you start, write the slide id into Id as soon as `apply`
+  reports the new slide, and set `approved` when the user approves.
+- Restructuring the deck (new entries, cuts, a new order, a changed message) is `deck-storyline`'s
+  job; switch to it when the user asks for that. When it cuts or moves an entry that has an id,
+  delete or move that slide here (`delete_slide`, `move_slide`) once the user confirms.
 
 ## The render-check-review loop
 
@@ -156,7 +173,8 @@ screenshot, style from the brief. Never insert the screenshot as a picture.
   (`pptx inventory <their-deck.pptx>` next to the working copy's inventory) and ask when unsure;
   then replace it, `"from": {"deck": "<their-deck.pptx>", "slide": N}`. Their text is real
   content, never example text. To start over from their deck instead:
-  `pptx init decks/<new-slug> --from <their-deck.pptx> --keep-slides`, then copy `storyline.md` across.
+  `pptx init decks/<new-slug> --from <their-deck.pptx> --keep-slides`, then copy `storyline.md`
+  across and let `deck-storyline` re-link its entries: the slide ids in their deck differ.
 
 ## The design method
 

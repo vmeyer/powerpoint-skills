@@ -45,7 +45,7 @@ def test_code_commands_only_from_code():
 
 
 def test_skills_exist():
-    assert "slide-design" in [md.parent.name for md in SKILLS]
+    assert {"slide-design", "deck-storyline"} <= {md.parent.name for md in SKILLS}
 
 
 def test_frontmatter_and_length():
@@ -66,6 +66,33 @@ def test_slide_design_teaches_every_command():
     folder = ROOT / "skills" / "slide-design"
     used = set().union(*(code_commands(md.read_text(encoding="utf-8")) for md in [folder / "SKILL.md", *folder.glob("references/*.md")]))
     assert used >= {"init", "style", "inventory", "apply", "grid", "render", "check", "doctor"}
+
+
+STORYLINE_FORMAT = ROOT / "skills" / "deck-storyline" / "references" / "storyline-format.md"
+
+
+def test_one_storyline_format():
+    """deck-storyline defines storyline.md; slide-design points to that definition and reads existing decks the same way."""
+    design = (ROOT / "skills" / "slide-design" / "SKILL.md").read_text(encoding="utf-8")
+    storyline = (ROOT / "skills" / "deck-storyline" / "SKILL.md").read_text(encoding="utf-8")
+    assert "../deck-storyline/references/storyline-format.md" in _LINK.findall(design)
+    assert "references/storyline-format.md" in _LINK.findall(storyline)
+    assert "inventory" in code_commands(storyline) and "--outline" in storyline
+
+
+def test_storyline_example_follows_the_format():
+    text = STORYLINE_FORMAT.read_text(encoding="utf-8")
+    example = re.search(r"^```markdown\n(.*?)^```", text, re.S | re.M).group(1)
+    headings = [int(n) for n in re.findall(r"^### Slide (\d+)$", example, re.M)]
+    assert headings == list(range(1, len(headings) + 1)) and len(headings) >= 5
+    statuses = set()
+    for entry in re.split(r"^### Slide \d+\n", example, flags=re.M)[1:]:
+        fields = dict(re.findall(r"^- \*\*(\w+):\*\* (.+)$", entry, re.M))
+        assert {"Kicker", "Title", "Shows", "Sources", "Status", "Id"} <= set(fields), entry
+        assert fields["Id"] == "—" or fields["Id"].isdigit(), entry
+        statuses.add(fields["Status"])
+    assert statuses == {"open", "in design", "approved", "existing"}
+    assert not re.search(r" [·|•] ", example)  # no keyword chains
 
 
 def test_no_agent_specific_tool_names():

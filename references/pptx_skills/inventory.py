@@ -240,6 +240,20 @@ def to_markdown(inv: dict) -> str:
     return "\n".join(out).rstrip()
 
 
+def outline(inv: dict) -> dict:
+    """Number, stable id, kicker and title per slide: what a storyline needs from an existing deck."""
+    return {"slides": [{key: slide[key] for key in ("number", "id", "kicker", "title")} for slide in inv["slides"]]}
+
+
+def to_outline_text(data: dict) -> str:
+    """One line per slide, `N (id I) | kicker | title`; "—" where there is no text."""
+
+    def one_line(text: str | None) -> str:
+        return " ".join((text or "").split()) or "—"
+
+    return "\n".join(f"{s['number']} (id {s['id']}) | {one_line(s['kicker'])} | {one_line(s['title'])}" for s in data["slides"])
+
+
 def _handle(args) -> int:
     slides = None
     if args.slides:
@@ -248,7 +262,11 @@ def _handle(args) -> int:
         except ValueError:
             raise PptxSkillsError(f"--slides expects numbers like 1,3, got {args.slides!r}") from None
     inv = inventory(open_presentation(args.deck), slides)
-    cli.emit(args, inv, to_markdown(inv))
+    if args.outline:
+        data = outline(inv)
+        cli.emit(args, data, to_outline_text(data))
+    else:
+        cli.emit(args, inv, to_markdown(inv))
     return cli.OK
 
 
@@ -256,5 +274,6 @@ def register(subparsers) -> None:
     parser = subparsers.add_parser("inventory", help="List the slides and shapes of a deck.")
     parser.add_argument("deck", help="path to a .pptx or .potx file")
     parser.add_argument("--slides", help="comma-separated slide numbers, e.g. 1,3")
+    parser.add_argument("--outline", action="store_true", help="one line per slide: number, id, kicker, title")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.set_defaults(handler=_handle)
