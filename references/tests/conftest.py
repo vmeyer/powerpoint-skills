@@ -362,8 +362,12 @@ def finding(report, rule, shape=None):
     return next((f for f in report["findings"] if f["rule"] == rule and shape in (None, f["shape"])), None)
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "real_render: the test needs the real LibreOffice lookup")
+
+
 @pytest.fixture(autouse=True)
 def _no_libreoffice(request, monkeypatch):
-    """Keep `init`/`style` fast: contact sheets are skipped unless the test module is about rendering."""
-    if request.module.__name__ not in ("test_render", "test_local_acceptance"):
+    """Keep `init`/`style` fast: contact sheets are skipped unless the test is about rendering."""
+    if request.module.__name__ != "test_render" and not request.node.get_closest_marker("real_render"):
         monkeypatch.setattr("pptx_skills.render.find_soffice", lambda: None)

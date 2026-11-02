@@ -27,9 +27,6 @@ def _path(var):
     return Path(os.environ[var])
 
 
-can_render = pytest.mark.skipif(not (find_soffice() and find_pdftoppm()), reason="LibreOffice or poppler not installed")
-
-
 @needs(REFERENCE)
 def test_reference_slide_passes():
     rep = run_checks(_path(REFERENCE), all_slides=True)
@@ -37,8 +34,9 @@ def test_reference_slide_passes():
     assert not [f for f in rep["findings"] if f["category"] == "text" and f["severity"] == "warning"]
 
 
-@can_render
 @needs(REFERENCE)
+@pytest.mark.real_render
+@pytest.mark.skipif(not (find_soffice() and find_pdftoppm()), reason="LibreOffice or poppler not installed")
 def test_reference_slide_renders(tmp_path):
     files = render(_path(REFERENCE), tmp_path / "out")
     assert files and all(f.is_file() and f.stat().st_size > 0 for f in files)
@@ -68,8 +66,7 @@ def test_clone_every_example(tmp_path):
             refused.append((number, str(exc)))
         else:
             cloned += 1
-    print(f"cloned {cloned} of {total} example slides, refused {len(refused)}: {refused}")
-    assert cloned + len(refused) == total
+    assert cloned > 0, f"cloned {cloned} of {total} example slides, refused {len(refused)}: {refused}"
     assert all("cannot be cloned" in message for _, message in refused), refused
     assert len(open_presentation(working).slides) == cloned
     report = run_checks(working, all_slides=True)
@@ -77,33 +74,44 @@ def test_clone_every_example(tmp_path):
 
 
 def _title_only_layout(brief):
+    """A layout whose only content placeholders are kicker and title (footer, date and number are copied)."""
+    plain = {"kicker", "title", "number", "footer", "date"}
     for lay in brief["layouts"]:
-        roles = [p["role"] for p in lay["placeholders"]]
-        if "title" in roles and "body" not in roles:
+        roles = {p["role"] for p in lay["placeholders"]}
+        if {"kicker", "title"} <= roles <= plain:
             return lay["name"]
-    pytest.fail("no layout with a title and no body placeholder")
+    pytest.fail("no layout with kicker and title and nothing else to fill")
 
 
 @needs(MASTER, EXAMPLES)
+@pytest.mark.real_render
 def test_cli_workflow_end_to_end(tmp_path, capsys):
     deck_dir = tmp_path / "wf"
     assert cli.main(["init", str(deck_dir), "--from", str(_path(MASTER)), "--examples", str(_path(EXAMPLES))]) == 0
-    layout = _title_only_layout(load_brief(deck_dir))
+    brief = load_brief(deck_dir)
+    layout = _title_only_layout(brief)
+    x, y, w, h = brief["content_area"]
+    gap = 0.5
+    box_w, box_h, box_y = round((w - gap) / 2, 2), round(h * 0.4, 2), round(y + h * 0.3, 2)
+    boxes = [[round(x, 2), box_y, box_w, box_h], [round(x + box_w + gap, 2), box_y, box_w, box_h]]
     ops = [
         {"op": "add_slide", "layout": layout},
         {"op": "set_text", "slide": "$last", "target": {"role": "kicker"}, "text": "Acceptance"},
         {"op": "set_text", "slide": "$last", "target": {"role": "title"}, "text": "The workflow runs end to end on this master"},
-        {"op": "add_shape", "slide": "$last", "name": "box-a", "shape": "rect", "box": [1.69, 5, 8, 3],
+        {"op": "add_shape", "slide": "$last", "name": "box-a", "shape": "rect", "box": boxes[0],
          "fill": "lt2", "line": "none", "text": "First", "font": {"size": 12, "color": "tx1"}},
-        {"op": "add_shape", "slide": "$last", "name": "box-b", "shape": "rect", "box": [10.5, 5, 8, 3],
+        {"op": "add_shape", "slide": "$last", "name": "box-b", "shape": "rect", "box": boxes[1],
          "fill": "lt2", "line": "none", "text": "Second", "font": {"size": 12, "color": "tx1"}},
     ]
     changes = tmp_path / "change.json"
     changes.write_text(json.dumps({"label": "acceptance", "ops": ops}), encoding="utf-8")
     working = deck_dir / "wf.pptx"
     assert cli.main(["apply", str(working), str(changes)]) == 0
-    assert cli.main(["check", str(deck_dir)]) in (0, 1)
     capsys.readouterr()
+    report = run_checks(deck_dir, all_slides=True)
+    assert report["summary"]["error"] == 0, [f for f in report["findings"] if f["severity"] == "error"]
+    assert not [f for f in report["findings"] if f["category"] == "text" and f["severity"] == "warning"], [f for f in report["findings"] if f["category"] == "text"]
+    assert cli.main(["check", str(deck_dir)]) == 0
     assert len(open_presentation(working).slides) == 1
     if find_soffice() and find_pdftoppm():
         assert cli.main(["render", str(working), "--out", str(tmp_path / "png")]) == 0
