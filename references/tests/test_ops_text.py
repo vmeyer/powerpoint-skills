@@ -103,9 +103,9 @@ def test_errors(title_deck, formatted_box_deck):
         apply(title_deck, [{"op": "set_text", "slide": 1, "target": {"role": "title"}}])
     with pytest.raises(PptxSkillsError, match="op 1 .set_text."):
         apply(title_deck, [{"op": "set_text", "slide": 1, "target": {"role": "title"}, "text": "a", "paragraphs": []}])
-    with pytest.raises(PptxSkillsError, match="raw color"):
+    with pytest.raises(PptxSkillsError, match="unknown color"):
         apply(title_deck, [{"op": "set_text", "slide": 1, "target": {"role": "title"},
-                            "paragraphs": [{"runs": [{"t": "a", "color": "#FF0000"}]}]}])
+                            "paragraphs": [{"runs": [{"t": "a", "color": "#FF00"}]}]}])
     with pytest.raises(PptxSkillsError, match="no shape matches"):
         apply(title_deck, [{"op": "set_text", "slide": 1, "target": {"name": "ghost"}, "text": "a"}])
 
@@ -251,17 +251,6 @@ def test_font_bold_applies_to_runs_without_markers(hand_formatted_deck):
     assert resolve_shape(slide1(hand_formatted_deck), {"name": "box"}).text_frame.paragraphs[0].runs[0].font.bold is False
 
 
-def test_raw_color_errors_suggest_allow_rgb_only_where_the_op_takes_it(title_deck):
-    run = {"t": "a", "color": "#FF0000"}
-    with pytest.raises(PptxSkillsError, match="raw color") as exc:
-        apply(title_deck, [{"op": "set_text", "slide": 1, "target": {"role": "title"}, "paragraphs": [{"runs": [run]}]}])
-    assert "allow_rgb" not in str(exc.value)
-    with pytest.raises(PptxSkillsError, match="raw color") as exc:
-        apply(title_deck, [{"op": "set_text", "slide": 1, "target": {"role": "title"}, "text": "a", "font": {"color": "#FF0000"}}])
-    assert "allow_rgb" not in str(exc.value)
-    for shape_op in (
-        {"op": "add_shape", "slide": 1, "name": "s", "shape": "rect", "box": [1, 1, 3, 2], "fill": "#FF0000"},
-        {"op": "add_shape", "slide": 1, "name": "s", "shape": "rect", "box": [1, 1, 3, 2], "paragraphs": [{"runs": [run]}]},
-    ):
-        with pytest.raises(PptxSkillsError, match='"allow_rgb": true'):
-            apply(title_deck, [shape_op])
+def test_set_text_takes_hex_colors(title_deck):
+    apply(title_deck, [{"op": "set_text", "slide": 1, "target": {"role": "title"}, "text": "a", "font": {"color": "#FF0000"}}])
+    assert str(slide1(title_deck).shapes.title.text_frame.paragraphs[0].runs[0].font.color.rgb) == "FF0000"

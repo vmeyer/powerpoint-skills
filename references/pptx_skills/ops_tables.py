@@ -10,7 +10,7 @@ from .brief import default_table_style, table_style_catalog
 from .changeset import Context, op, resolve_shape
 from .colors import apply_color
 from .errors import PptxSkillsError
-from .ops_shapes import _check_name, _color, _snapped
+from .ops_shapes import _color, _snapped, shape_name
 from .ops_text import _shorthand, write_paragraphs
 from .slides import resolve_slide
 
@@ -39,33 +39,32 @@ def _check_rectangular(rows: list[list[str]]) -> int:
     return widths.pop()
 
 
-def _fill_cells(table, rows: list[list[str]], font: dict, allow_rgb: bool) -> None:
+def _fill_cells(table, rows: list[list[str]], font: dict) -> None:
     for r, row in enumerate(rows):
         for c, text in enumerate(row):
             # the shorthand rule of set_text: without `**` the cell takes its weight from the table style
-            write_paragraphs(table.cell(r, c).text_frame, _shorthand(text, font), font, allow_rgb)
+            write_paragraphs(table.cell(r, c).text_frame, _shorthand(text, font), font)
 
 
 @op("add_table")
 def _add_table(ctx: Context, spec: dict) -> None:
     slide = resolve_slide(ctx.prs, spec["slide"], ctx.last_slide)
-    _check_name(slide, spec["name"])
+    name = shape_name(ctx, slide, spec, "table")
     rows = spec["rows"]
     cols = _check_rectangular(rows)
     widths = spec.get("col_widths")
     if widths is not None and len(widths) != cols:
         raise PptxSkillsError(f"col_widths lists {len(widths)} widths for {cols} columns")
-    allow_rgb = bool(spec.get("allow_rgb"))
     fills = {}
     for key, color in spec.get("fills", {}).items():
         r, c = (int(v) for v in key.split(","))
         if r >= len(rows) or c >= cols:
             raise PptxSkillsError(f'fills "{key}" is outside the {len(rows)}x{cols} table (row,column are 0-based)')
-        fills[(r, c)] = _color(color, allow_rgb, f'fills "{key}"')
+        fills[(r, c)] = _color(color, f'fills "{key}"')
     style_id = _style_id(ctx.prs, spec.get("style"))
     box = _snapped(ctx, spec["box"])
     frame = slide.shapes.add_table(len(rows), cols, Cm(box.x), Cm(box.y), Cm(box.w), Cm(box.h))
-    frame.name = spec["name"]
+    frame.name = name
     table = frame.table
     table.first_row = spec.get("header", True)
     table.horz_banding = False  # banding is decoration the change set did not ask for
@@ -75,7 +74,7 @@ def _add_table(ctx: Context, spec: dict) -> None:
         for column, width in zip(table.columns, widths):
             column.width = Cm(width)
         frame.width = sum(column.width for column in table.columns)
-    _fill_cells(table, rows, spec.get("font") or {}, allow_rgb)
+    _fill_cells(table, rows, spec.get("font") or {})
     for (r, c), ref in fills.items():
         cell = table.cell(r, c)
         if ref is None:
@@ -121,5 +120,5 @@ def _set_table(ctx: Context, spec: dict) -> None:
         trs[-1].addnext(clone)
         trs.append(clone)
     frame.height = sum(int(tr.get("h")) for tr in trs)
-    _fill_cells(table, rows, spec.get("font") or {}, bool(spec.get("allow_rgb")))
+    _fill_cells(table, rows, spec.get("font") or {})
     ctx.touched.add(slide.slide_id)

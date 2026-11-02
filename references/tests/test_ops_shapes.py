@@ -105,11 +105,8 @@ def test_unknown_pattern_preset(deck):
                       "pattern": {"preset": "nope", "fg": "accent6", "bg": "lt1"}}])
 
 
-def test_rgb_requires_flag(deck):
-    ops = [{"op": "add_shape", "slide": 1, "name": "r", "shape": "rect", "box": [2, 2, 5, 3], "fill": "#FF0000"}]
-    with pytest.raises(PptxSkillsError, match="allow_rgb"):
-        apply(deck, ops)
-    apply(deck, [dict(ops[0], allow_rgb=True)])
+def test_rgb_needs_no_flag(deck):
+    apply(deck, [{"op": "add_shape", "slide": 1, "name": "r", "shape": "rect", "box": [2, 2, 5, 3], "fill": "#FF0000"}])
     assert inv_shape(deck, "r")["fill"] == "#FF0000"
 
 
@@ -252,7 +249,7 @@ def test_failed_op_leaves_deck_untouched(deck):
     before = deck.read_bytes()
     with pytest.raises(PptxSkillsError, match=r"op 2 \(add_shape\)"):
         apply(deck, [{"op": "add_shape", "slide": 1, "name": "ok", "shape": "rect", "box": [2, 2, 5, 3]},
-                     {"op": "add_shape", "slide": 1, "name": "bad", "shape": "rect", "box": [2, 2, 5, 3], "fill": "#00FF00"}])
+                     {"op": "add_shape", "slide": 1, "name": "bad", "shape": "rect", "box": [2, 2, 5, 3], "fill": "#00FF0"}])
     assert deck.read_bytes() == before
 
 
@@ -278,12 +275,10 @@ def test_unstyled_shape_has_no_style_fill_or_line(deck):
     assert inv_shape(deck, "styled")["line"] == {"color": "dk1", "width_pt": 1}
 
 
-def test_allow_rgb_reaches_text_colors(deck):
+def test_rgb_text_colors_and_the_old_flag(deck):
     op = {"op": "add_shape", "slide": 1, "name": "t", "shape": "rect", "box": [2, 2, 5, 3], "text": "Hi",
-          "font": {"color": "#FF0000"}}
-    with pytest.raises(PptxSkillsError, match="allow_rgb"):
-        apply(deck, [op])
-    apply(deck, [dict(op, allow_rgb=True)])
+          "font": {"color": "#FF0000"}, "allow_rgb": True}  # the flag is no longer needed, but still accepted
+    apply(deck, [op])
     run = shape_named(deck, "t").text_frame.paragraphs[0].runs[0]
     assert str(run.font.color.rgb) == "FF0000"
 

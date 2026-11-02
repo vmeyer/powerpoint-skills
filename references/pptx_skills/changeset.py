@@ -21,6 +21,16 @@ from .opc import lock_file, open_presentation, save_presentation
 from .roles import placeholder_role
 
 _TITLE_TYPES = ("TITLE", "CENTER_TITLE", "VERTICAL_TITLE")
+DEFAULT_TEXT_PT = 14
+
+
+def default_text_size(deck: dict | None, brief: dict | None) -> float:
+    """The size of text in added shapes when the op gives none: the master's smallest body size, but at least the
+    brief's minimum size; 14 pt for a deck without master (the neutral template's sizes are nobody's choice)."""
+    sizes = ((brief or {}).get("text_styles") or {}).get("body_pt") or []
+    if not (deck and deck["sources"].get("master") and sizes):
+        return DEFAULT_TEXT_PT
+    return max(min(sizes), (brief.get("rules") or {}).get("min_size_pt", 0))
 
 
 @dataclass
@@ -38,6 +48,11 @@ class Context:
     sources: dict = field(default_factory=dict)  # resolved path -> opened source deck
     # the highest slide id the deck folder has used, deleted slides included; new slides go above it (R26)
     max_slide_id: int = 0
+    # the size of text in added shapes when the op gives none (see default_text_size)
+    text_size: float = DEFAULT_TEXT_PT
+    # names the ops generated because the op gave none: {slide id: [name, …]}
+    auto_names: dict = field(default_factory=dict)
+    before: bytes = b""  # the file as it was, for the snapshot and the rollback
 
 
 OPS: dict = {}
@@ -123,8 +138,13 @@ def resolve_shape(slide, target: dict):
 
 
 def _label(changeset: dict) -> str:
-    label = re.sub(r"[^a-z0-9]+", "-", str(changeset.get("label") or "").lower()).strip("-")[:40].strip("-")
-    return label or "changes"
+    return slug_label(changeset.get("label"), "changes")
+
+
+def slug_label(text, default: str) -> str:
+    """`text` as a kebab-case label of at most 40 characters for the change log, else `default`."""
+    label = re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")[:40].strip("-")
+    return label or default
 
 
 def _run(ctx: Context, ops: list) -> None:
@@ -137,85 +157,109 @@ def _run(ctx: Context, ops: list) -> None:
             raise PptxSkillsError(f"op {number} ({spec['op']}): unexpected {type(exc).__name__}: {exc}") from exc
 
 
-def _check_target(deck_path: Path, deck: dict | None, outside_deck: bool) -> None:
+def _check_target(deck_path: Path, deck: dict | None, outside_deck: bool, command: str = "apply") -> None:
     """Refuse to write anything but a working copy (R28): never a template or a deck's style source, and any
     other file only with `outside_deck`. `deck` is the deck.json of the folder whose working copy this is."""
     if deck_path.suffix.lower() == ".potx":
         raise PptxSkillsError(
-            f"{deck_path} is a template, and apply never writes a .potx; start a deck from it with "
-            f"`pptx init decks/<slug> --from {deck_path}` and apply the change set to its working copy"
+            f"{deck_path} is a template, and {command} never writes a .potx; start a deck from it with "
+            f"`pptx init decks/<slug> --from {deck_path}` and work on its working copy"
         )
     target = deck_path.resolve()
     if deck is not None:  # a working copy: only its own deck's sources count (another deck may start from it)
         if any(src and Path(src).resolve() == target for src in deck["sources"].values()):
-            raise PptxSkillsError(f"{deck_path} is also a style source of its own deck folder; apply never writes a source")
+            raise PptxSkillsError(f"{deck_path} is also a style source of its own deck folder; {command} never writes a source")
         return
     owner = deck_using_as_source(deck_path)
     if owner is not None:
         raise PptxSkillsError(
-            f"{deck_path} is a style source of the deck folder {owner}, and apply never writes the user's original; "
-            f"apply the change set to that deck's working copy instead"
+            f"{deck_path} is a style source of the deck folder {owner}, and {command} never writes the user's original; "
+            f"work on that deck's working copy instead"
         )
     if not outside_deck:
         raise PptxSkillsError(
-            f"{deck_path} is not the working copy of a deck folder, and apply writes only working copies so the "
+            f"{deck_path} is not the working copy of a deck folder, and {command} writes only working copies so the "
             f"user's own file stays untouched; start a deck from it with `pptx init decks/<slug> --from {deck_path}` "
-            "(add --keep-slides to keep its slides), or pass --outside-deck to change this file in place without "
-            "snapshot or change log"
+            "(add --keep-slides to keep its slides)"
+            + (", or pass --outside-deck to change this file in place without snapshot or change log"
+               if command in ("apply", "exec") else "")
         )
 
 
-def apply_changeset(deck_path: Path, changeset: dict, outside_deck: bool = False) -> dict:
-    """Apply `changeset` to the working copy `deck_path`; `outside_deck` also allows any other .pptx (R28)."""
+def open_working_copy(deck_path: Path, outside_deck: bool = False, command: str = "apply") -> Context:
+    """Open a deck for one all-or-nothing change: the Context that `finish` saves.
+
+    Refuses anything but a deck folder's working copy (R28), any other .pptx too unless `outside_deck`; the
+    notes for the user (no log outside a deck folder, changed outside the agent, open in PowerPoint) go into
+    `ctx.messages`.
+    """
     deck_path = Path(deck_path)
-    validate_changeset(changeset)
-    for spec in changeset["ops"]:
-        if spec["op"] not in OPS:
-            raise PptxSkillsError(f"op {spec['op']} is not implemented")
     prs = open_presentation(deck_path)  # fails with a clear message if the file is missing or unreadable
     deck_dir = find_deck_dir(deck_path)
     deck = load_deck(deck_dir) if deck_dir else None
     if deck is not None and deck["working_copy"] != deck_path.name:
         deck_dir, deck = None, None  # a stray file next to deck.json, not the working copy
-    _check_target(deck_path, deck, outside_deck)
+    _check_target(deck_path, deck, outside_deck, command)
     messages: list[str] = []
     if deck_dir is None:
         messages.append("--outside-deck: the file was changed in place; no snapshot and no change-log entry are kept")
     elif changed_externally(deck_dir):
-        messages.append("the working copy changed outside the agent since the last apply; the change set was applied to the current file")
+        messages.append(f"the working copy changed outside the agent since the last change; {command} worked on the current file")
     if lock_file(deck_path):
         messages.append("the deck is open in PowerPoint; close it or reload it to see the result")
-
     try:
         before = deck_path.read_bytes()
     except OSError as exc:
         raise PptxSkillsError(f"cannot read {deck_path}: {exc}") from exc
-    ctx = Context(
+    brief = load_brief(deck_dir) if deck_dir else None
+    return Context(
         prs=prs,
         deck_path=deck_path,
         deck_dir=deck_dir,
-        brief=load_brief(deck_dir) if deck_dir else None,
+        brief=brief,
         examples_path=deck["sources"].get("examples") if deck else None,
         messages=messages,
         cloned_texts=copy.deepcopy(deck.get("cloned_texts") or {}) if deck else {},
         max_slide_id=max([(deck or {}).get("max_slide_id") or 0, *(s.slide_id for s in prs.slides)]),
+        text_size=default_text_size(deck, brief),
+        before=before,
     )
-    _run(ctx, changeset["ops"])
+
+
+def finish(ctx: Context, record: dict | str, label: str) -> dict:
+    """Save the deck, log `record` (a change set, or a script's text) as `label`; all or nothing.
+
+    Returns `seq` (None outside a deck folder), the `touched` slide ids still in the deck, the `messages` and
+    the generated names as `auto_names`: {slide number: [name, …]}.
+    """
     live = {s.slide_id for s in ctx.prs.slides}
     touched = sorted(ctx.touched & live)
     live_keys = {str(i) for i in live}
     ctx.cloned_texts = {k: v for k, v in ctx.cloned_texts.items() if k in live_keys}  # also drops deleted slides
-    seq = _write(ctx, changeset, before, touched)
-    return {"seq": seq, "touched": touched, "messages": messages}
+    seq = _write(ctx, record, label, touched)
+    numbers = {s.slide_id: n for n, s in enumerate(ctx.prs.slides, 1)}
+    auto_names = {str(numbers[i]): names for i, names in sorted(ctx.auto_names.items(), key=lambda kv: numbers.get(kv[0], 0)) if i in numbers}
+    return {"seq": seq, "touched": touched, "messages": ctx.messages, "auto_names": auto_names}
+
+
+def apply_changeset(deck_path: Path, changeset: dict, outside_deck: bool = False) -> dict:
+    """Apply `changeset` to the working copy `deck_path`; `outside_deck` also allows any other .pptx (R28)."""
+    validate_changeset(changeset)
+    for spec in changeset["ops"]:
+        if spec["op"] not in OPS:
+            raise PptxSkillsError(f"op {spec['op']} is not implemented")
+    ctx = open_working_copy(deck_path, outside_deck)
+    _run(ctx, changeset["ops"])
+    return finish(ctx, changeset, _label(changeset))
 
 
 def _listing(folder: Path) -> set[str] | None:
     return {p.name for p in folder.iterdir()} if folder.is_dir() else None
 
 
-def _write(ctx: Context, changeset: dict, before: bytes, touched: list[int]) -> int | None:
+def _write(ctx: Context, record: dict | str, label: str, touched: list[int]) -> int | None:
     """Replace the deck, then log it; any failure restores the deck, deck.json, changes/ and snapshots/."""
-    deck_path, deck_dir = ctx.deck_path, ctx.deck_dir
+    deck_path, deck_dir, before = ctx.deck_path, ctx.deck_dir, ctx.before
     tmp = deck_path.with_name(f".{deck_path.name}.tmp")
     saved = {}
     replaced = False
@@ -228,7 +272,7 @@ def _write(ctx: Context, changeset: dict, before: bytes, touched: list[int]) -> 
         replaced = True
         if deck_dir is None:
             return None
-        return record_apply(deck_dir, changeset, _label(changeset), before, touched, new_hash, ctx.cloned_texts, ctx.max_slide_id)
+        return record_apply(deck_dir, record, label, before, touched, new_hash, ctx.cloned_texts, ctx.max_slide_id)
     except OSError as exc:
         _rollback(deck_path, deck_dir, before, saved, replaced)
         raise PptxSkillsError(f"could not write {deck_path}; nothing was changed: {exc}") from exc
@@ -397,12 +441,18 @@ def _handle_apply(args) -> int:
     except ValueError as exc:
         raise PptxSkillsError(f"{path} is not valid JSON: {exc}") from exc
     result = apply_changeset(Path(args.deck), changeset, args.outside_deck)
-    lines = [f"Applied {len(changeset['ops'])} op(s)" + (f" as change {result['seq']:03d}" if result["seq"] else "")]
+    head = f"Applied {len(changeset['ops'])} op(s)" + (f" as change {result['seq']:03d}" if result["seq"] else "")
+    cli.emit(args, result, "\n".join([head, *result_lines(result)]))
+    return cli.OK
+
+
+def result_lines(result: dict) -> list[str]:
+    """The lines after the headline of `apply`, `exec` and `build`: touched ids, generated names, notes."""
+    lines = []
     if result["touched"]:
         lines.append("touched slide ids: " + ", ".join(str(i) for i in result["touched"]))
-    lines += [f"note: {m}" for m in result["messages"]]
-    cli.emit(args, result, "\n".join(lines))
-    return cli.OK
+    lines += [f"named on slide {number}: {', '.join(names)}" for number, names in result["auto_names"].items()]
+    return lines + [f"note: {m}" for m in result["messages"]]
 
 
 def register(subparsers) -> None:

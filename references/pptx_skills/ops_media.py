@@ -11,7 +11,7 @@ from .brief import DEFAULT_RULES
 from .changeset import Context, op, resolve_shape
 from .colors import apply_color, parse_color
 from .errors import PptxSkillsError
-from .ops_shapes import _check_name, _snapped
+from .ops_shapes import _snapped, shape_name
 from .slides import resolve_slide
 
 _CHART_TYPES = {
@@ -79,7 +79,7 @@ def _style_chart(chart, kind: str, spec: dict, size: float) -> None:
 @op("add_chart")
 def _add_chart(ctx: Context, spec: dict) -> None:
     slide = resolve_slide(ctx.prs, spec["slide"], ctx.last_slide)
-    _check_name(slide, spec["name"])
+    name = shape_name(ctx, slide, spec, "chart")
     categories = spec["categories"]
     for ser in spec["series"]:
         if len(ser["values"]) != len(categories):
@@ -92,7 +92,7 @@ def _add_chart(ctx: Context, spec: dict) -> None:
         data.add_series(ser["name"], ser["values"])
     box = _snapped(ctx, spec["box"])
     frame = slide.shapes.add_chart(_CHART_TYPES[spec["type"]], Cm(box.x), Cm(box.y), Cm(box.w), Cm(box.h), data)
-    frame.name = spec["name"]
+    frame.name = name
     _style_chart(frame.chart, spec["type"], spec, _min_size(ctx))
     ctx.touched.add(slide.slide_id)
 
@@ -133,15 +133,17 @@ def _add_picture(ctx: Context, spec: dict) -> None:
         placeholder = resolve_shape(slide, spec["target"])
         if not hasattr(placeholder, "insert_picture"):
             raise PptxSkillsError(f'shape {placeholder.shape_id} "{placeholder.name}" is not a picture placeholder; use "box" to place a picture freely')
-        if spec["name"] != placeholder.name:
-            _check_name(slide, spec["name"])
+        if spec.get("name") == placeholder.name:
+            name = placeholder.name  # the picture takes over the placeholder and its name
+        else:
+            name = shape_name(ctx, slide, spec, "picture")
         pic = placeholder.insert_picture(str(path))  # crops to fill the placeholder
     else:
-        _check_name(slide, spec["name"])
+        name = shape_name(ctx, slide, spec, "picture")
         box = _snapped(ctx, spec["box"])
         pic = slide.shapes.add_picture(str(path), Cm(box.x), Cm(box.y), Cm(box.w), Cm(box.h))
         _crop_to_fill(pic, box.w, box.h)
-    pic.name = spec["name"]
+    pic.name = name
     pic._element.nvPicPr.cNvPr.set("descr", spec["alt"])  # python-pptx would put the file name here
     ctx.touched.add(slide.slide_id)
 

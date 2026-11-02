@@ -9,7 +9,7 @@ from pptx.util import Pt
 
 from . import timing
 from .changeset import Context, op, resolve_shape
-from .colors import RGB_OPTION, apply_color, parse_color
+from .colors import apply_color, parse_color
 from .errors import PptxSkillsError
 from .slides import resolve_slide
 
@@ -65,11 +65,11 @@ def _style_paragraph(p_el, spec: dict) -> None:
             ppr.attrib.pop("indent", None)
 
 
-def _format(run, spec: dict, font: dict, allow_rgb: bool | None = None) -> None:
+def _format(run, spec: dict, font: dict) -> None:
     """Apply explicit formatting; the run keeps whatever else it inherited from the template.
 
     A run's own `b` wins over `font.bold`; `"b": None` (the shorthand without markers) removes the template's
-    weight unless `font.bold` is given. `allow_rgb` None means the op has no allow_rgb option.
+    weight unless `font.bold` is given.
     """
     if spec.get("b") is not None:
         run.font.bold = bool(spec["b"])
@@ -83,7 +83,7 @@ def _format(run, spec: dict, font: dict, allow_rgb: bool | None = None) -> None:
     if "size" in merged:
         run.font.size = Pt(merged["size"])
     if "color" in merged:
-        ref = parse_color(str(merged["color"]), bool(allow_rgb), RGB_OPTION if allow_rgb is not None else None)
+        ref = parse_color(str(merged["color"]))
         if ref is None:
             fill = run._r.get_or_add_rPr().find(qn("a:solidFill"))
             if fill is not None:
@@ -96,13 +96,12 @@ def _is_break(spec: dict) -> bool:
     return bool(spec.get("br"))
 
 
-def write_paragraphs(text_frame, paragraphs: list[dict], font: dict | None = None, allow_rgb: bool | None = None) -> None:
+def write_paragraphs(text_frame, paragraphs: list[dict], font: dict | None = None) -> None:
     """Replace the text of `text_frame`.
 
     `paragraphs` is `[{"level"?, "bullet"?, "runs": [{"t", "b"?, "i"?, "color"?, "size"?} | {"br": true}]}]`.
     The first paragraph's properties and first run's properties are the template for everything written, so
     formatting the caller does not specify survives. `font` (size, color, bold) applies to every run.
-    Raw `#RRGGBB` colors are rejected unless `allow_rgb`; None means the op offers no allow_rgb option.
     """
     font = font or {}
     body = text_frame._txBody
@@ -135,7 +134,7 @@ def write_paragraphs(text_frame, paragraphs: list[dict], font: dict | None = Non
                 if old is not None:
                     run._r.remove(old)
                 run._r.insert(0, copy.deepcopy(template_rpr))
-            _format(run, run_spec, font, allow_rgb)
+            _format(run, run_spec, font)
 
 
 def slide_number(ctx: Context, slide) -> int:

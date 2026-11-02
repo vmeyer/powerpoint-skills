@@ -17,19 +17,14 @@ def test_parse(text, ref):
 
 def test_none_and_errors():
     assert parse_color("none") is None
-    with pytest.raises(PptxSkillsError, match="not allowed; use a theme role") as exc:
-        parse_color("#FF0000")
-    assert "allow_rgb" not in str(exc.value)
-    with pytest.raises(PptxSkillsError, match='or set "allow_rgb": true'):
-        parse_color("#FF0000", option='"allow_rgb": true')
     with pytest.raises(PptxSkillsError, match="unknown color"):
         parse_color("accent9")
-    assert parse_color("#ff0000", allow_rgb=True) == ColorRef(None, "FF0000", 0)
+    assert parse_color("#ff0000") == ColorRef(None, "FF0000", 0)
     assert format_color(ColorRef(None, "FF0000", 0)) == "#FF0000"
     with pytest.raises(PptxSkillsError, match="unknown color"):
         parse_color("accent1+100")
     with pytest.raises(PptxSkillsError, match="unknown color"):
-        parse_color("#GG0000", allow_rgb=True)
+        parse_color("#GG0000")
 
 
 def test_apply_then_read(default_pptx):
@@ -41,7 +36,7 @@ def test_apply_then_read(default_pptx):
     assert read_color(shp._element.spPr.find(qn("a:solidFill"))) == "accent1+60"
     apply_color(shp.fill.fore_color, parse_color("dk2-25"))
     assert read_color(shp._element.spPr.find(qn("a:solidFill"))) == "dk2-25"
-    apply_color(shp.fill.fore_color, parse_color("#1f4e79", allow_rgb=True))
+    apply_color(shp.fill.fore_color, parse_color("#1f4e79"))
     assert read_color(shp._element.spPr.find(qn("a:solidFill"))) == "#1F4E79"
 
 

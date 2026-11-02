@@ -9,7 +9,7 @@ from lxml import etree
 
 from . import timing
 from .changeset import Context, _walk, op, resolve_shape
-from .colors import RGB_OPTION, apply_color, parse_color
+from .colors import apply_color, parse_color
 from .errors import PptxSkillsError
 from .geometry import Box, _xfrm, snap_box
 from .ops_text import _format, _shorthand, prune_text_animation, slide_number, write_paragraphs
@@ -63,14 +63,30 @@ def _check_name(slide, name: str) -> None:
         raise PptxSkillsError(f'a shape named "{name}" already exists on the slide')
 
 
-def _color(text: str, allow_rgb: bool, what: str):
+def shape_name(ctx: Context, slide, spec: dict, prefix: str) -> str:
+    """The op's `name`, which must be new on the slide, or else the first free `<prefix>-<n>`.
+
+    A generated name is recorded in `ctx.auto_names` so the output can report it.
+    """
+    if "name" in spec:
+        _check_name(slide, spec["name"])
+        return spec["name"]
+    taken = {s.name for s in _walk(slide.shapes)}
+    n = 1
+    while f"{prefix}-{n}" in taken:
+        n += 1
+    ctx.auto_names.setdefault(slide.slide_id, []).append(f"{prefix}-{n}")
+    return f"{prefix}-{n}"
+
+
+def _color(text: str, what: str):
     try:
-        return parse_color(str(text), allow_rgb, RGB_OPTION)  # every op that calls this takes allow_rgb
+        return parse_color(str(text))
     except PptxSkillsError as exc:
         raise PptxSkillsError(f"{what}: {exc}") from exc
 
 
-def _set_fill(shape, spec: dict, allow_rgb: bool) -> None:
+def _set_fill(shape, spec: dict) -> None:
     if "fill" in spec and "pattern" in spec:
         raise PptxSkillsError('"fill" and "pattern" are mutually exclusive')
     if "pattern" in spec:
@@ -82,12 +98,12 @@ def _set_fill(shape, spec: dict, allow_rgb: bool) -> None:
         shape.fill.patterned()
         shape.fill.pattern = kind
         for key, target in (("fg", shape.fill.fore_color), ("bg", shape.fill.back_color)):
-            ref = _color(pat[key], allow_rgb, f"pattern {key}")
+            ref = _color(pat[key], f"pattern {key}")
             if ref is None:
                 raise PptxSkillsError(f'pattern {key} needs a color, not "none"')
             apply_color(target, ref)
     elif "fill" in spec:
-        ref = _color(spec["fill"], allow_rgb, "fill")
+        ref = _color(spec["fill"], "fill")
         if ref is None:
             shape.fill.background()
         else:
@@ -95,12 +111,12 @@ def _set_fill(shape, spec: dict, allow_rgb: bool) -> None:
             apply_color(shape.fill.fore_color, ref)
 
 
-def _set_line(shape, line, allow_rgb: bool) -> None:
+def _set_line(shape, line) -> None:
     ln = shape.line
     if line == "none":
         ln.fill.background()
         return
-    ref = _color(line["color"], allow_rgb, "line color")
+    ref = _color(line["color"], "line color")
     if ref is None:
         ln.fill.background()
         return
@@ -118,15 +134,14 @@ def _set_line(shape, line, allow_rgb: bool) -> None:
 def _set_text(shape, spec: dict, wrap: bool = False) -> None:
     tf = shape.text_frame
     font = spec.get("font") or {}
-    allow_rgb = bool(spec.get("allow_rgb"))
     if "text" in spec or "paragraphs" in spec:
         paragraphs = _shorthand(spec["text"], font) if "text" in spec else spec["paragraphs"]
-        write_paragraphs(tf, paragraphs, font, allow_rgb)
+        write_paragraphs(tf, paragraphs, font)
         wrap = True
     elif font:  # font alone restyles the existing runs
         for para in tf.paragraphs:
             for run in para.runs:
-                _format(run, {}, font, allow_rgb)
+                _format(run, {}, font)
     if wrap:
         tf.word_wrap = True
     if "align" in spec:
@@ -140,10 +155,9 @@ def _set_text(shape, spec: dict, wrap: bool = False) -> None:
 
 
 def _style(shape, spec: dict, wrap: bool = False) -> None:
-    allow_rgb = bool(spec.get("allow_rgb"))
-    _set_fill(shape, spec, allow_rgb)
+    _set_fill(shape, spec)
     if "line" in spec:
-        _set_line(shape, spec["line"], allow_rgb)
+        _set_line(shape, spec["line"])
     if "radius" in spec:
         if len(shape.adjustments) == 0 or shape.auto_shape_type != MSO_SHAPE.ROUNDED_RECTANGLE:
             raise PptxSkillsError('"radius" only applies to roundRect shapes')
@@ -156,17 +170,30 @@ def _place(shape, box: Box) -> None:
     shape.left, shape.top, shape.width, shape.height = Cm(box.x), Cm(box.y), Cm(box.w), Cm(box.h)
 
 
+TEXT_INSETS_CM = [0.2, 0.2, 0.2, 0.2]
+
+
+def _text_defaults(ctx: Context, spec: dict) -> dict:
+    """`spec` with what an added shape's text gets unless the op says otherwise: the deck's default text size
+    (`ctx.text_size`) in tx1, left-aligned at the top, 0.2 cm from the edges. Without text nothing is added."""
+    if "text" not in spec and "paragraphs" not in spec:
+        return spec
+    font = {"size": ctx.text_size, "color": "tx1", **(spec.get("font") or {})}
+    return {"align": "left", "anchor": "top", "insets": TEXT_INSETS_CM, **spec, "font": font}
+
+
 @op("add_shape")
 def _add_shape(ctx: Context, spec: dict) -> None:
     slide = resolve_slide(ctx.prs, spec["slide"], ctx.last_slide)
-    _check_name(slide, spec["name"])
-    box = _snapped(ctx, spec["box"])
     kind = spec["shape"]
+    name = shape_name(ctx, slide, spec, kind)
+    box = _snapped(ctx, spec["box"])
     if kind == "textbox":
         shape = slide.shapes.add_textbox(Cm(box.x), Cm(box.y), Cm(box.w), Cm(box.h))
     else:
         shape = slide.shapes.add_shape(_PRESETS[kind], Cm(box.x), Cm(box.y), Cm(box.w), Cm(box.h))
-    shape.name = spec["name"]
+    shape.name = name
+    spec = _text_defaults(ctx, spec)
     if "rotation" in spec:
         shape.rotation = spec["rotation"]
     style = shape._element.find(qn("p:style"))
@@ -179,14 +206,14 @@ def _add_shape(ctx: Context, spec: dict) -> None:
 @op("add_line")
 def _add_line(ctx: Context, spec: dict) -> None:
     slide = resolve_slide(ctx.prs, spec["slide"], ctx.last_slide)
-    _check_name(slide, spec["name"])
+    name = shape_name(ctx, slide, spec, "line")
     (x1, y1), (x2, y2) = (_snap_point(ctx, *spec[k]) for k in ("from", "to"))
     line = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Cm(x1), Cm(y1), Cm(x2), Cm(y2))
-    line.name = spec["name"]
+    line.name = name
     style = {"color": spec["color"], "width_pt": spec["width_pt"]}
     if "dash" in spec:
         style["dash"] = spec["dash"]
-    _set_line(line, style, bool(spec.get("allow_rgb")))
+    _set_line(line, style)
     ln = line.line._get_or_add_ln()
     for key, tag in (("head", "a:headEnd"), ("tail", "a:tailEnd")):
         if key in spec:
@@ -266,9 +293,9 @@ def _group(ctx: Context, spec: dict) -> None:
             raise PptxSkillsError(f'shape "{s.name}" is inside a group; only top-level shapes can be grouped')
         if s.is_placeholder:
             raise PptxSkillsError(f'shape "{s.name}" is a placeholder and cannot be grouped')
-    _check_name(slide, spec["name"])
+    name = shape_name(ctx, slide, spec, "group")
     group = slide.shapes.add_group_shape(shapes)  # extents are recalculated so chOff/chExt equal off/ext
-    group.name = spec["name"]
+    group.name = name
     ctx.touched.add(slide.slide_id)
 
 

@@ -224,7 +224,7 @@ def init_deck(
 
 def record_apply(
     deck_dir: Path,
-    changeset: dict,
+    changeset: dict | str,
     label: str,
     before: bytes,
     touched: list[int],
@@ -232,7 +232,8 @@ def record_apply(
     cloned_texts: dict | None = None,
     max_slide_id: int | None = None,
 ) -> int:
-    """Log the change set, keep the snapshot and update deck.json.
+    """Log the change set (a dict, logged as `changes/NNN-<label>.json`, or a script's text, logged as `.py`), keep
+    the snapshot and update deck.json.
 
     `cloned_texts` replaces the stored record; `max_slide_id` raises the stored highest slide id, never lowers it.
     """
@@ -242,9 +243,12 @@ def record_apply(
     slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-") or "change"
     (deck_dir / "changes").mkdir(exist_ok=True)
     (deck_dir / "snapshots").mkdir(exist_ok=True)
-    (deck_dir / "changes" / f"{number:03d}-{slug}.json").write_text(
-        json.dumps(changeset, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    if isinstance(changeset, str):
+        (deck_dir / "changes" / f"{number:03d}-{slug}.py").write_text(changeset, encoding="utf-8")
+    else:
+        (deck_dir / "changes" / f"{number:03d}-{slug}.json").write_text(
+            json.dumps(changeset, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
     (deck_dir / "snapshots" / f"{number:03d}.pptx").write_bytes(before)
     deck.update(
         seq=number,

@@ -83,7 +83,7 @@
           {
             "title": "add_shape",
             "type": "object",
-            "required": ["op", "slide", "name", "shape", "box"],
+            "required": ["op", "slide", "shape", "box"],
             "additionalProperties": false,
             "not": {"required": ["text", "paragraphs"]},
             "properties": {
@@ -109,7 +109,7 @@
           {
             "title": "add_table",
             "type": "object",
-            "required": ["op", "slide", "name", "box", "rows"],
+            "required": ["op", "slide", "box", "rows"],
             "additionalProperties": false,
             "properties": {
               "op": {"const": "add_table"},
@@ -142,7 +142,7 @@
           {
             "title": "add_chart",
             "type": "object",
-            "required": ["op", "slide", "name", "box", "type", "categories", "series"],
+            "required": ["op", "slide", "box", "type", "categories", "series"],
             "additionalProperties": false,
             "properties": {
               "op": {"const": "add_chart"},
@@ -171,7 +171,7 @@
           {
             "title": "add_picture",
             "type": "object",
-            "required": ["op", "slide", "name", "path", "alt"],
+            "required": ["op", "slide", "path", "alt"],
             "additionalProperties": false,
             "oneOf": [{"required": ["box"]}, {"required": ["target"]}],
             "properties": {
@@ -198,7 +198,7 @@
           {
             "title": "add_line",
             "type": "object",
-            "required": ["op", "slide", "name", "from", "to", "color", "width_pt"],
+            "required": ["op", "slide", "from", "to", "color", "width_pt"],
             "additionalProperties": false,
             "properties": {
               "op": {"const": "add_line"},
@@ -266,7 +266,7 @@
           {
             "title": "group",
             "type": "object",
-            "required": ["op", "slide", "targets", "name"],
+            "required": ["op", "slide", "targets"],
             "additionalProperties": false,
             "properties": {
               "op": {"const": "group"},

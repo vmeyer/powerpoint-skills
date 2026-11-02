@@ -35,25 +35,15 @@ class ColorRef:
     brightness: int = 0
 
 
-RGB_OPTION = '"allow_rgb": true'
-
-
-def parse_color(text: str, allow_rgb: bool = False, option: str | None = None) -> ColorRef | None:
-    """Parse ``accent1``, ``accent1+60``, ``dk2-25``, ``#RRGGBB`` (if allowed) or ``none``.
-
-    `option` names the switch that would allow a raw color (``RGB_OPTION``) where the caller offers one; the
-    error mentions it only then.
-    """
+def parse_color(text: str) -> ColorRef | None:
+    """Parse ``accent1``, ``accent1+60``, ``dk2-25``, ``#RRGGBB`` or ``none``."""
     text = text.strip()
     if text == "none":
         return None
     if text.startswith("#"):
         match = _RGB_PATTERN.match(text)
         if not match:
-            raise PptxSkillsError(f"unknown color {text!r}")
-        if not allow_rgb:
-            hint = f", or set {option}" if option else ""
-            raise PptxSkillsError(f"raw color {text!r} is not allowed; use a theme role such as accent1 or tx1-25{hint}")
+            raise PptxSkillsError(f"unknown color {text!r}; use #RRGGBB or a theme role such as accent1 or tx1-25")
         return ColorRef(None, match.group(1).upper(), 0)
     match = _THEME_PATTERN.match(text)
     if not match or (match.group(3) is not None and not 1 <= int(match.group(3)) <= 99):
