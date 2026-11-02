@@ -365,5 +365,5 @@ def finding(report, rule, shape=None):
 @pytest.fixture(autouse=True)
 def _no_libreoffice(request, monkeypatch):
     """Keep `init`/`style` fast: contact sheets are skipped unless the test module is about rendering."""
-    if request.module.__name__ != "test_render":
+    if request.module.__name__ not in ("test_render", "test_local_acceptance"):
         monkeypatch.setattr("pptx_skills.render.find_soffice", lambda: None)
