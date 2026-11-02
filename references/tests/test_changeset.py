@@ -168,3 +168,46 @@ def test_section_for_slide_added_to_emptied_deck(make_deck):
     new = slides.add_slide(prs, "Blank")
     assert _sections(prs) == [[], [new.slide_id]]
     _consistent(prs)
+
+
+# --- failure handling -------------------------------------------------------------------------
+
+def _state(deck_dir):
+    deck = deck_dir / "d.pptx"
+    names = lambda n: sorted(p.name for p in (deck_dir / n).iterdir()) if (deck_dir / n).is_dir() else None
+    return (file_hash(deck), (deck_dir / "deck.json").read_bytes(), names("changes"), names("snapshots"),
+            sorted(p.name for p in deck_dir.iterdir()))
+
+
+def test_missing_deck_is_a_clean_error(tmp_path, capsys):
+    cs = tmp_path / "cs.json"
+    cs.write_text(json.dumps({"ops": [{"op": "add_slide", "layout": "Blank"}]}))
+    with pytest.raises(PptxSkillsError, match="does not exist"):
+        apply_changeset(tmp_path / "missing.pptx", json.loads(cs.read_text()))
+    assert main(["apply", str(tmp_path / "missing.pptx"), str(cs)]) == 2
+    assert capsys.readouterr().err.startswith("error:")
+
+
+def test_failed_replace_leaves_everything_unchanged(deck_dir_from_default, monkeypatch):
+    apply_changeset(deck_dir_from_default / "d.pptx", {"label": "first", "ops": [{"op": "add_slide", "layout": "Blank"}]})
+    state = _state(deck_dir_from_default)
+
+    def boom(*a, **k):
+        raise OSError("disk says no")
+
+    monkeypatch.setattr("pptx_skills.changeset.os.replace", boom)
+    with pytest.raises(PptxSkillsError, match="nothing was changed"):
+        apply_changeset(deck_dir_from_default / "d.pptx", {"ops": [{"op": "add_slide", "layout": "Blank"}]})
+    assert _state(deck_dir_from_default) == state
+
+
+def test_failure_inside_record_apply_rolls_back(deck_dir_from_default, monkeypatch):
+    state = _state(deck_dir_from_default)
+
+    def boom(*a, **k):
+        raise OSError("disk says no")
+
+    monkeypatch.setattr("pptx_skills.deckdir._save_deck", boom)  # runs after log and snapshot were written
+    with pytest.raises(PptxSkillsError, match="nothing was changed"):
+        apply_changeset(deck_dir_from_default / "d.pptx", {"ops": [{"op": "add_slide", "layout": "Blank"}]})
+    assert _state(deck_dir_from_default) == state

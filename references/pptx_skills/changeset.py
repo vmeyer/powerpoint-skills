@@ -135,6 +135,7 @@ def apply_changeset(deck_path: Path, changeset: dict) -> dict:
     for spec in changeset["ops"]:
         if spec["op"] not in OPS:
             raise PptxSkillsError(f"op {spec['op']} is not implemented")
+    prs = open_presentation(deck_path)  # fails with a clear message if the file is missing or unreadable
     deck_dir = find_deck_dir(deck_path)
     deck = load_deck(deck_dir) if deck_dir else None
     if deck is not None and deck["working_copy"] != deck_path.name:
@@ -147,9 +148,12 @@ def apply_changeset(deck_path: Path, changeset: dict) -> dict:
     if lock_file(deck_path):
         messages.append("the deck is open in PowerPoint; close it or reload it to see the result")
 
-    before = deck_path.read_bytes()
+    try:
+        before = deck_path.read_bytes()
+    except OSError as exc:
+        raise PptxSkillsError(f"cannot read {deck_path}: {exc}") from exc
     ctx = Context(
-        prs=open_presentation(deck_path),
+        prs=prs,
         deck_path=deck_path,
         deck_dir=deck_dir,
         brief=load_brief(deck_dir) if deck_dir else None,
@@ -157,19 +161,67 @@ def apply_changeset(deck_path: Path, changeset: dict) -> dict:
         messages=messages,
     )
     _run(ctx, changeset["ops"])
+    live = {s.slide_id for s in ctx.prs.slides}
+    touched = sorted(ctx.touched & live)
+    seq = _write(ctx, changeset, before, touched)
+    return {"seq": seq, "touched": touched, "messages": messages}
 
+
+def _listing(folder: Path) -> set[str] | None:
+    return {p.name for p in folder.iterdir()} if folder.is_dir() else None
+
+
+def _write(ctx: Context, changeset: dict, before: bytes, touched: list[int]) -> int | None:
+    """Replace the deck, then log it; any failure restores the deck, deck.json, changes/ and snapshots/."""
+    deck_path, deck_dir = ctx.deck_path, ctx.deck_dir
     tmp = deck_path.with_name(f".{deck_path.name}.tmp")
+    saved = {}
+    replaced = False
+    if deck_dir is not None:
+        saved["json"] = (deck_dir / "deck.json").read_bytes()
+        saved["dirs"] = {n: _listing(deck_dir / n) for n in ("changes", "snapshots")}
     try:
         new_hash = save_presentation(ctx.prs, tmp)
-        live = {s.slide_id for s in ctx.prs.slides}
-        touched = sorted(ctx.touched & live)
-        seq = None
-        if deck_dir is not None:
-            seq = record_apply(deck_dir, changeset, _label(changeset), before, touched, new_hash)
         os.replace(tmp, deck_path)
+        replaced = True
+        if deck_dir is None:
+            return None
+        return record_apply(deck_dir, changeset, _label(changeset), before, touched, new_hash)
+    except OSError as exc:
+        _rollback(deck_path, deck_dir, before, saved, replaced)
+        raise PptxSkillsError(f"could not write {deck_path}; nothing was changed: {exc}") from exc
+    except BaseException:
+        _rollback(deck_path, deck_dir, before, saved, replaced)
+        raise
     finally:
         tmp.unlink(missing_ok=True)
-    return {"seq": seq, "touched": touched, "messages": messages}
+
+
+def _rollback(deck_path: Path, deck_dir: Path | None, before: bytes, saved: dict, replaced: bool) -> None:
+    """Best effort: undo whatever this apply wrote."""
+    steps = []
+    if replaced:
+        steps.append(lambda: deck_path.write_bytes(before))
+    if deck_dir is not None:
+        steps.append(lambda: (deck_dir / "deck.json").write_bytes(saved["json"]))
+        for name, names in saved["dirs"].items():
+            folder = deck_dir / name
+            steps.append(lambda folder=folder, names=names: _restore_dir(folder, names))
+    for step in steps:
+        try:
+            step()
+        except OSError:
+            pass
+
+
+def _restore_dir(folder: Path, names: set[str] | None) -> None:
+    if not folder.is_dir():
+        return
+    for item in folder.iterdir():
+        if names is None or item.name not in names:
+            item.unlink()
+    if names is None:
+        folder.rmdir()
 
 
 @op("add_slide")
