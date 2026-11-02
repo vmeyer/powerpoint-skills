@@ -18,10 +18,14 @@ pptx exec decks/<slug>/<slug>.pptx decks/<slug>/big-number.py    # run only
 - Afterwards the tool gives new slides fresh ids and a section, refreshes slide numbers, runs the
   structure checks (the file must reopen, every relationship must exist, no duplicate ids), keeps a
   snapshot and logs the script as `changes/NNN-<script-name>.py`. Touched are the new slides and those
-  whose XML changed; `build` checks and renders exactly those.
+  whose XML changed; `build` checks and renders exactly those. A change to the slide master, a layout or
+  the theme touches every slide.
+- `print()` output goes to stderr, so the command's own output (and `--json`) stays clean.
 - Paths, e.g. of pictures, are relative to the current folder, the user's project.
 - Only the working copy of a deck folder is written (`--outside-deck` allows another `.pptx`, in place).
-- To delete or move slides, use a change set (`delete_slide`, `move_slide`).
+- Delete or move slides only with the helpers `delete_slide` and `move_slide` (or a change set). A script
+  that removes or reorders slides itself is refused, since sections, custom shows and links would fall out
+  of step.
 
 | Global | What it is |
 |---|---|
@@ -31,7 +35,8 @@ pptx exec decks/<slug>/<slug>.pptx decks/<slug>/big-number.py    # run only
 | `cm(x)`, `pt(x)` | lengths for python-pptx |
 | `theme_color(target, color)` | colors `shape.fill` (made solid), `shape.line`, `run.font` or any color format such as a gradient stop's `.color`; `color` is a theme role (`accent1`, `accent1+40`, `tx1-25`), `#RRGGBB`, or `none` for a fill or line |
 | `plain(shape)` | removes the style python-pptx gives a new auto shape (accent fill, outline, shadow, light centered text), so the shape starts empty; returns it |
-| `add_slide(layout, after=None)` | a new slide with the layout's footer, date and number, a fresh id, in the right section; `after` is a slide, a number or `"id:<n>"` |
+| `add_slide(layout, after=None)` | a new slide with the layout's footer, date and number, a fresh id, in the right section; `after` is a slide, a number or `"id:<n>"`. A slide added with `prs.slides.add_slide` alone gets no footer, date or number |
+| `delete_slide(slide)`, `move_slide(slide, to)` | remove a slide (with its section entry and the links to it) or move it to the 1-based position `to`; `slide` as for `after` |
 | `slide_by_id(id)`, `layout(name)` | a slide by its id, a layout by its name |
 
 Habits that keep scripts short and slides editable:

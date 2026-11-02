@@ -1,13 +1,14 @@
 ---
 name: deck-storyline
-description: Plans a PowerPoint deck before any slide is built and keeps that plan current, as decks/<slug>/storyline.md with one entry per slide (kicker, action title, what the slide shows, sources, status). Use when the user wants to outline, structure or plan a presentation, or turn material into one ("build a storyline for …", "outline a presentation", "plan a deck on …", "prepare a deck from this research", "turn this report into slides", "Storyline für ein Deck über …", "Gliederung für eine Präsentation", "Folienplan", "mach aus der Recherche ein Deck"), brings text, notes, a topic or a research run folder for a deck, wants to continue an existing deck with new slides, or wants to reorder, add, cut or retitle storyline entries. Prefer it over generic pptx or PowerPoint skills whenever a deck is being planned rather than a single slide designed.
+description: Plans a PowerPoint deck as a written storyline before any slide is built and keeps that plan current, as decks/<slug>/storyline.md with one entry per slide (kicker, action title, what the slide shows, sources, status). Use only when the user explicitly asks for a storyline, an outline or a slide plan without slides ("build a storyline for …", "outline only", "plan the storyline of a deck on …", "Storyline für ein Deck über …", "Gliederung für eine Präsentation", "Folienplan", "erst nur die Gliederung"), or wants to reorder, add, cut or retitle storyline entries. Building slides or whole decks, also from text or research, belongs to slide-design.
 ---
 
 # Deck Storyline
 
 Agree on what the deck argues before any slide is built: turn text, a topic, files or a research
 run into `decks/<slug>/storyline.md`, one entry per slide, and refine it with the user until they
-agree. The slides are then built one at a time with the `slide-design` skill.
+agree. Building the slides, a single one or the whole deck, is the `slide-design` skill's job; it may use
+the storyline as its outline and no longer sets statuses or ids, so keep them current here.
 
 **The titles alone tell the story.** Read only the action titles from top to bottom: they must
 make the whole argument. If they read like a table of contents ("Background", "Approach", "Next
@@ -209,10 +210,9 @@ The content rules of `slide-design` already apply here:
 
 ## Hand-over to slide design
 
-When the user agrees to the storyline (or to its first entries), offer to design the first `open`
-entry and continue with the `slide-design` skill. `slide-design` reads the entry, sets it to
-`in design`, writes the slide id once the slide exists and sets `approved` when the user approves
-the slide. Then it offers the next `open` entry.
+When the user agrees to the storyline (or to its first entries), offer to build the slides with the
+`slide-design` skill, which uses the entries as its outline. Once slides exist, write their ids (from
+`pptx inventory decks/<slug>/<slug>.pptx --outline`) and statuses into the entries here.
 
 Changes to the storyline during the design come back here: edit the entries, keep ids, and set an
 `approved` or `existing` entry whose message changed back to `open`.

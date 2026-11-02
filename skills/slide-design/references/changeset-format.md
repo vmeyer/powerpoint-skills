@@ -44,8 +44,9 @@ Revising: change a text, recolor and move a shape, rename it.
   `line-1`, `table-1`, `chart-1`, `picture-1`, `group-1`); the output lists the names given. A name you
   give must be new on the slide.
 - **Text in an added shape** gets, unless the op says otherwise: the master's smallest body size (14 pt
-  without a master), color `tx1`, left, top, insets 0.2 cm. Added shapes have **no fill and no line**
-  until you set them. A `textbox` grows with its text; a `rect` keeps its size, so `check` reports overflow.
+  without a master), color `tx1`, left, top, insets 0.2 cm. These defaults apply only to text that
+  `add_shape` writes; text written later with `set_text` or `update_shape` keeps the shape's formatting.
+  Added shapes have **no fill and no line** until you set them. A `textbox` grows with its text; a `rect` keeps its size, so `check` reports overflow.
 - **Colors:** theme roles `dk1 lt1 dk2 lt2 tx1 tx2 bg1 bg2 accent1`…`accent6 hlink folHlink`, with an
   optional brightness `+NN` (lighter) or `-NN` (darker) in percent (`accent1+40`, `tx1-25`); any `#RRGGBB`;
   `none` for no fill, line or explicit run color. Theme roles follow `pptx theme` and the master.

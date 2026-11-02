@@ -47,7 +47,7 @@ Everything runs through `pptx`, shipped with this plugin: `uv run --project <plu
 | a master or template | `pptx init decks/<slug> --from <master.potx>`, then read `decks/<slug>/style/brief.md` (layouts, theme colors, sizes). Keep its theme; change it with `pptx theme` only when the user asks |
 | a deck to continue | `pptx init decks/<slug> --from <deck.pptx> --keep-slides` |
 | slides showing the style in use | add `--examples <examples.pptx>`; reuse a slide with `clone_slide` from `"examples"` |
-| a deck folder already | work in it |
+| `decks/<slug>` already | work in it; `pptx init decks/<slug> --reuse` refreshes its brief, e.g. with new `--examples`. Pass `--replace` only when the user asks to start over: it deletes the working copy and its history |
 
 `init --sheets` (or later `pptx style decks/<slug> --sheets`) renders the master's layouts to
 `style/layouts.png` when you want to see them. If `decks/<slug>/storyline.md` exists, it can serve as
@@ -86,6 +86,9 @@ A short change set; names, text size, color, alignment and insets have defaults:
 `build` exits 1 on check errors (text overflow, a shape off the slide, leftover template text, a broken
 file) and warns about keyword chains and paragraphs over three lines. `--strict` adds the matters of
 taste (sizes, alignment, gaps, colors, fonts); use it before handing over a deck on a corporate master.
+`build` exits 2 when the change fails (then nothing changed) or when only the render fails: then the change
+is saved, so render with `pptx render decks/<slug>/<slug>.pptx --slides N` instead of building again,
+which would repeat the step.
 
 ## Look, fix, show
 
