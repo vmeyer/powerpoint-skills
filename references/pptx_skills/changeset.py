@@ -432,14 +432,18 @@ def _replace_slide(ctx: Context, spec: dict) -> None:
 from . import ops_media, ops_shapes, ops_tables, ops_text  # noqa: E402,F401
 
 
-def _handle_apply(args) -> int:
-    path = Path(args.changeset)
+def read_changeset(path: Path) -> dict:
+    path = Path(path)
     try:
-        changeset = json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
         raise PptxSkillsError(f"cannot read {path}: {exc}") from exc
     except ValueError as exc:
         raise PptxSkillsError(f"{path} is not valid JSON: {exc}") from exc
+
+
+def _handle_apply(args) -> int:
+    changeset = read_changeset(Path(args.changeset))
     result = apply_changeset(Path(args.deck), changeset, args.outside_deck)
     head = f"Applied {len(changeset['ops'])} op(s)" + (f" as change {result['seq']:03d}" if result["seq"] else "")
     cli.emit(args, result, "\n".join([head, *result_lines(result)]))
