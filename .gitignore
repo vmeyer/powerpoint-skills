@@ -13,9 +13,10 @@ __pycache__/
 *.odp
 decks/
 
-# Render output next to a corporate deck (e.g. <deck>-render/) and loose images in the
-# repo root must never be committable either.
+# Render output next to a corporate deck (e.g. <deck>-render/), PowerPoint's exchange
+# folders (_export/) and loose images in the repo root must never be committable either.
 *-render/
+_export/
 /*.png
 /*.jpg
 /*.jpeg

@@ -149,8 +149,8 @@ Set the engine up once per machine, or ask your agent: "Set up the powerpoint-sk
    sudo apt install libreoffice             # Linux
    ```
 
-   To pick a renderer yourself, pass `--renderer powerpoint` or `--renderer libreoffice` to `pptx render`
-   and `pptx style`, or set `PPTX_SKILLS_RENDERER` (default `auto`).
+   To pick a renderer yourself, pass `--renderer powerpoint` or `--renderer libreoffice` to `pptx init`,
+   `pptx render` and `pptx style`, or set `PPTX_SKILLS_RENDERER` (default `auto`).
 3. **poppler** turns the PDF into PNGs, with either renderer:
 
    ```bash
@@ -187,8 +187,9 @@ Masters, templates and example decks are usually confidential. Keep them outside
 example in `~/Documents/pptx-templates/`, and never put them into a public repository. `init` stores the
 absolute path of every source in `decks/<slug>/deck.json` and reads them from there, so keep them at a fixed
 place; after a move, point the deck at the new paths with `pptx init decks/<slug> --reuse --from … --examples …`.
-The working copy `decks/<slug>/<slug>.pptx` is a copy of your master: if your project repository is public,
-add `decks/` to its `.gitignore`.
+The working copy `decks/<slug>/<slug>.pptx` is a copy of your master: if your project repository is public or
+shared, add `decks/` and `_export/` (PowerPoint's exchange folder, which may briefly hold a copy of a deck) to its
+`.gitignore`.
 
 ### Three style sources
 

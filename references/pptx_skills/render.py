@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -57,12 +58,24 @@ _POWERPOINT_SETUP = (
     f'one "Grant Access" dialog for `decks/{EXPORT_FOLDER}` (for a deck outside a deck folder: `{EXPORT_FOLDER}` '
     f'next to it), so click "Grant Access" once. {_CANCEL}'
 )
+_DENIED = re.compile(r"-1743|-1744|not authori[sz]ed|not allowed to send", re.I)
+# Files this tool leaves in an export folder: copies, PDFs and Office owner files (`~$`, names may be shortened)
+_LEFTOVER = re.compile(r"^(?:render-|~\$\S{0,7})[0-9a-f]{32}\.(?:pptx|pdf)$")
+_STALE_S = 600
+_FALLBACK = "PowerPoint could not render"
 
 
 def _grant_hint(exchange: Path) -> str:
     return (f'PowerPoint is probably showing a "Grant Access" dialog for {exchange}: click "Grant Access" '
             f"(it is asked once per project), then run the command again; {_CANCEL}")
-_DENIED = re.compile(r"-1743|not authori[sz]ed|not allowed to send", re.I)
+
+
+def _timeout_hint(exchange: Path) -> str:
+    return ("A dialog is probably waiting: either macOS asks whether the app that runs `pptx` may control Microsoft "
+            f'PowerPoint (allow it), or PowerPoint shows its "Grant Access" dialog for {exchange} (click "Grant '
+            f'Access"; it is asked once per project). Then run the command again; {_CANCEL}')
+
+
 # The copy is opened, exported and closed by its unique name; the user's own presentations are never addressed,
 # PowerPoint is never quit, and the paths arrive as arguments rather than as script text.
 _EXPORT_SCRIPT = """on run argv
@@ -213,13 +226,16 @@ def _powerpoint_pdf(prs, exchange: Path, pdf: Path) -> Path:
     PowerPoint is sandboxed: it writes only into folders the user granted one by one, so `exchange` is the
     project's fixed `_export` folder (see default_export_dir), kept between runs. It receives a copy with a unique
     name and every slide shown (PowerPoint leaves hidden slides out of a PDF, so page n would no longer be slide n);
-    the files of this run (copy, PowerPoint's owner file, PDF) are always removed, other files stay.
+    the files of this run (copy, Office owner files, PDF) are always removed, other files stay.
     """
-    stem = f"render-{uuid.uuid4().hex}"
+    exchange = Path(exchange).resolve()  # AppleScript reads a relative path as an HFS path
+    token = uuid.uuid4().hex
+    stem = f"render-{token}"
     try:
         exchange.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise _PowerPointFailed(f"cannot create {exchange}: {exc}", "check that the output folder is writable") from exc
+    _sweep_leftovers(exchange)
     started = done = False
     try:
         for slide in prs.slides:
@@ -234,7 +250,7 @@ def _powerpoint_pdf(prs, exchange: Path, pdf: Path) -> Path:
             )
         except subprocess.TimeoutExpired as exc:
             raise _PowerPointFailed(f"PowerPoint did not answer within {_POWERPOINT_TIMEOUT_S} s",
-                                    _grant_hint(exchange)) from exc
+                                    _timeout_hint(exchange)) from exc
         if result.returncode != 0:
             tail = (result.stderr or result.stdout or "").strip()[-400:]
             if _DENIED.search(tail):
@@ -252,11 +268,30 @@ def _powerpoint_pdf(prs, exchange: Path, pdf: Path) -> Path:
     finally:
         if started and not done:
             _close_quietly(stem)
-        for leftover in exchange.glob(f"*{stem}*"):  # the copy, PowerPoint's ~$ owner file, the PDF
+        for leftover in exchange.glob(f"*{token}*"):  # the copy, Office owner files (maybe shortened), the PDF
             try:
                 leftover.unlink()
             except OSError:
                 pass
+
+
+def _sweep_leftovers(exchange: Path) -> None:
+    """Remove this tool's files that earlier runs left in `exchange`, e.g. a PDF PowerPoint wrote after a timeout.
+
+    Only files older than _STALE_S go, since a recent one may belong to a render running right now; other files
+    in the folder are never touched.
+    """
+    cutoff = time.time() - _STALE_S
+    try:
+        entries = list(exchange.iterdir())
+    except OSError:
+        return
+    for path in entries:
+        try:
+            if _LEFTOVER.match(path.name) and path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+        except OSError:
+            pass
 
 
 def _close_quietly(stem: str) -> None:
@@ -329,8 +364,7 @@ def render(
                 if want == "powerpoint" or find_soffice() is None:
                     raise PptxSkillsError(f"PowerPoint could not export {deck.name} to PDF: {exc}. {exc.hint}.") from exc
                 if notes is not None:
-                    notes.append(f"PowerPoint could not render ({exc}), so LibreOffice did; "
-                                 "`pptx doctor` shows PowerPoint's one-time setup")
+                    notes.append(f"{_FALLBACK} ({exc}), so LibreOffice did; `pptx doctor` shows PowerPoint's one-time setup")
         if pdf is None:
             pdf = _libreoffice_pdf(find_soffice(), deck, tmp)
         written = []
@@ -458,6 +492,8 @@ def update_sheets(
         _require_tools(renderer)
         render_layouts(deck_dir / deck["working_copy"], style / LAYOUTS_SHEET, renderer, notes, export_dir)
         if examples:
+            if any(note.startswith(_FALLBACK) for note in notes):
+                renderer = "libreoffice"  # auto mode and PowerPoint just failed: do not wait for it a second time
             render_examples(Path(examples), style / EXAMPLES_SHEET, renderer, notes, export_dir)
     except (PptxSkillsError, OSError) as exc:
         return None, [*dict.fromkeys(notes), f"contact sheets skipped: {exc}"]

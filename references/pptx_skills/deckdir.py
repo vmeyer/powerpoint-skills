@@ -152,7 +152,9 @@ def init_deck(
     keep_slides: bool = False,
     mode: str = "new",
     notes: list[str] | None = None,
+    renderer: str | None = None,
 ) -> dict:
+    """Create (or reuse or replace) the deck folder; `renderer` renders the contact sheets (see refresh_brief)."""
     deck_dir = Path(deck_dir)
     exists = _deck_json(deck_dir).is_file()
     if mode == "new" and exists:
@@ -162,7 +164,7 @@ def init_deck(
         for key, value in (("master", source), ("examples", examples), ("style_file", style_file)):
             if value is not None:
                 deck["sources"][key] = _abs(value)
-        refresh_brief(deck_dir, deck, notes=notes)
+        refresh_brief(deck_dir, deck, notes=notes, renderer=renderer)
         _save_deck(deck_dir, deck)
         return deck
     if source is None and style_file is None:
@@ -208,7 +210,7 @@ def init_deck(
             # the highest slide id ever used here; new slides get higher ids (R26)
             "max_slide_id": max([MIN_SLIDE_ID - 1, *(s.slide_id for s in prs.slides), (old or {}).get("max_slide_id") or 0]),
         }
-        refresh_brief(stage, deck, notes=notes)
+        refresh_brief(stage, deck, notes=notes, renderer=renderer)
         _save_deck(stage, deck)
         deck_dir.mkdir(parents=True, exist_ok=True)
         if old is not None:
@@ -280,6 +282,7 @@ def _handle_init(args) -> int:
         args.keep_slides,
         mode,
         notes,
+        args.renderer,
     )
     cli.emit(args, {**deck, "notes": notes} if notes else deck, "\n".join([_summary(deck), *notes]))
     return cli.OK
@@ -311,6 +314,7 @@ def register(subparsers) -> None:
     group = init.add_mutually_exclusive_group()
     group.add_argument("--reuse", action="store_true", help="keep the working copy, refresh the brief")
     group.add_argument("--replace", action="store_true", help="start over in an existing deck folder; files the deck does not own stay")
+    add_renderer_option(init)
     init.add_argument("--json", action="store_true", help="machine-readable output")
     init.set_defaults(handler=_handle_init)
 

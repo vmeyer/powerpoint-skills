@@ -52,7 +52,8 @@ theme fonts). It names the renderer and prints install commands for whatever is 
   folder through which every deck of the project goes to PowerPoint; the user clicks "Grant Access"
   once. If a render times out, that dialog is probably waiting: ask the user to click "Grant
   Access", then render again. "Cancel" falls back to LibreOffice where it is installed; the render
-  then prints a note, pass it on. `--renderer libreoffice` on `render` and `style` skips PowerPoint.
+  then prints a note, pass it on. `--renderer libreoffice` on `init`, `render` and `style` skips
+  PowerPoint.
 - Without a renderer or poppler there is no render: tell the user and stop. A missing theme font
   means renders and text measurement use a fallback; mention it when you show a slide.
 

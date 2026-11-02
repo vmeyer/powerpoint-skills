@@ -320,8 +320,9 @@ def fake_powerpoint(monkeypatch, tmp_path):
     """An installed PowerPoint (version 16.99) driven by a fake osascript; LibreOffice is missing unless a test adds it.
 
     `state.behavior` decides what an export does: "ok" writes the PDF, "fail" exits 1 as an Automation denial does,
-    "cancel" exits 1 as a cancelled dialog does, "timeout" never answers, "silent" exits 0 without a PDF. Every
-    export records the copy PowerPoint was given and, like PowerPoint, leaves an owner file `~$<copy>` next to it.
+    "consent" exits 1 as a refused automation consent does, "cancel" exits 1 as a cancelled dialog does,
+    "timeout" never answers, "silent" exits 0 without a PDF. Every export records the copy PowerPoint was given and,
+    like Office, leaves owner files next to it: `~$<copy>` and a truncated `~$er-<hex>.pptx`.
     """
     app = tmp_path / "Applications/Microsoft PowerPoint.app"
     (app / "Contents").mkdir(parents=True)
@@ -342,10 +343,13 @@ def fake_powerpoint(monkeypatch, tmp_path):
             shown = [slide._element.get("show") for slide in Presentation(str(copy)).slides]
             state.exports.append({"copy": copy, "pdf": pdf, "stem": stem, "script": script, "shown": shown, "timeout": kwargs.get("timeout")})
             (copy.parent / f"~${copy.name}").write_bytes(b"owner")
+            (copy.parent / f"~${copy.name[4:]}").write_bytes(b"owner")
             if state.behavior == "timeout":
                 raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
             if state.behavior == "fail":
                 return subprocess.CompletedProcess(cmd, 1, "", "execution error: Not authorized to send Apple events to Microsoft PowerPoint. (-1743)")
+            if state.behavior == "consent":
+                return subprocess.CompletedProcess(cmd, 1, "", "execution error: Not authorized to send Apple events to Microsoft PowerPoint. (-1744)")
             if state.behavior == "cancel":
                 return subprocess.CompletedProcess(cmd, 1, "", "execution error: Microsoft PowerPoint got an error: User canceled. (-128)")
             if state.behavior == "ok":
@@ -421,7 +425,7 @@ def test_a_forced_renderer_must_be_installed(fake_powerpoint, monkeypatch, deck_
     assert fake_powerpoint.soffice == []
 
 
-def test_powerpoint_renders_an_unhidden_copy_inside_the_output_folder(fake_powerpoint, make_deck, tmp_path):
+def test_powerpoint_renders_an_unhidden_copy_in_the_export_folder_next_to_the_deck(fake_powerpoint, make_deck, tmp_path):
     deck = hidden_deck(make_deck)
     out = tmp_path / "out"
     files = render(deck, out, dpi=77)
@@ -460,7 +464,8 @@ _GRANT = ('"Grant Access" dialog for {export}', 'click "Grant Access"', "once pe
 
 @pytest.mark.parametrize("behavior, needles", [
     ("fail", ("-1743", *_AUTOMATION)),
-    ("timeout", ("within 120 s", "probably showing", *_GRANT)),
+    ("consent", ("-1744", *_AUTOMATION)),
+    ("timeout", ("within 120 s", "may control Microsoft PowerPoint", *_GRANT)),
     ("silent", ("no PDF", *_GRANT)),
     ("cancel", ("-128", *_AUTOMATION, *_GRANT)),
 ])
@@ -522,6 +527,58 @@ def test_contact_sheets_use_the_export_folder_next_to_the_deck(fake_powerpoint, 
     assert sorted(p.name for p in style.iterdir()) == ["examples.png", "layouts.png"]
     assert_empty_export_folder(tmp_path)
     assert hidden_entries(tmp_path) == []
+
+
+def test_powerpoint_gets_absolute_paths_for_a_relative_deck(fake_powerpoint, monkeypatch, deck_with_two_slides, tmp_path):
+    """AppleScript would read a relative path as an HFS path that PowerPoint cannot open."""
+    monkeypatch.chdir(tmp_path)
+    render(Path(deck_with_two_slides.name), Path("out"))
+    (export,) = fake_powerpoint.exports
+    assert export["copy"].is_absolute() and export["pdf"].is_absolute()
+    assert export["copy"].parent == (tmp_path / "_export").resolve()
+
+
+def _aged(path, seconds_ago):
+    path.write_bytes(b"x")
+    stamp = __import__("time").time() - seconds_ago
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def test_old_leftovers_in_the_export_folder_are_swept(fake_powerpoint, deck_with_two_slides, tmp_path):
+    """A PDF that PowerPoint wrote after a timed-out run goes on the next run; recent and foreign files stay."""
+    export = tmp_path / "_export"
+    export.mkdir()
+    old = [_aged(export / name, 3600) for name in (
+        f"render-{'a' * 32}.pdf", f"render-{'b' * 32}.pptx", f"~$render-{'b' * 32}.pptx", f"~$nder-{'c' * 32}.pptx",
+    )]
+    recent = _aged(export / f"render-{'d' * 32}.pdf", 60)  # may belong to a render running right now
+    foreign = [_aged(export / name, 3600) for name in (
+        "notes.pdf", "render-1234.pptx", f"render-{'e' * 32}.pptx.bak", f"my-render-{'f' * 32}.pdf", f"render-{'0123456789ABCDEF' * 2}.pdf",
+    )]
+    render(deck_with_two_slides, tmp_path / "out")
+    assert [p for p in old if p.exists()] == []
+    assert recent.exists() and all(p.exists() for p in foreign)
+
+
+def test_sheets_stop_trying_powerpoint_after_it_failed(fake_powerpoint, monkeypatch, tmp_path, default_pptx, examples_deck, capsys):
+    """In auto mode the examples sheet goes straight to LibreOffice once the layouts sheet fell back."""
+    with_libreoffice(monkeypatch)
+    fake_powerpoint.behavior = "timeout"
+    assert main(["init", str(tmp_path / "decks/a"), "--from", str(default_pptx), "--examples", str(examples_deck)]) == 0
+    assert len(fake_powerpoint.exports) == 1 and len(fake_powerpoint.soffice) == 2
+    out = capsys.readouterr().out
+    assert out.count("PowerPoint could not render") == 1
+    assert (tmp_path / "decks/a/style/layouts.png").is_file() and (tmp_path / "decks/a/style/examples.png").is_file()
+
+
+def test_init_takes_a_renderer(fake_powerpoint, monkeypatch, tmp_path, default_pptx):
+    with_libreoffice(monkeypatch)
+    assert main(["init", str(tmp_path / "decks/a"), "--from", str(default_pptx), "--renderer", "libreoffice"]) == 0
+    assert fake_powerpoint.exports == [] and len(fake_powerpoint.soffice) == 1
+    deck = load_deck(tmp_path / "decks/a")
+    assert main(["init", str(tmp_path / "decks/a"), "--reuse", "--renderer", "libreoffice"]) == 0
+    assert fake_powerpoint.exports == [] and deck == load_deck(tmp_path / "decks/a")
 
 
 def test_one_export_folder_per_project(fake_powerpoint, tmp_path, default_pptx, examples_deck):
