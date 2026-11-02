@@ -149,3 +149,8 @@ def deck_dir_from_default(tmp_path, default_pptx):
     deck_dir = tmp_path / "decks/d"
     init_deck(deck_dir, default_pptx)
     return deck_dir
+
+
+def finding(report, rule, shape=None):
+    """The first finding of `rule` (optionally on the shape named `shape`); None when absent."""
+    return next((f for f in report["findings"] if f["rule"] == rule and shape in (None, f["shape"])), None)

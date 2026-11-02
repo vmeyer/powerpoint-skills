@@ -1,0 +1,214 @@
+"""`pptx check`: deterministic rules an agent runs after every change, before it shows a slide.
+
+Rules register with `@rule(rule_id, category, severity)` and take `(ctx, slide)`; the modules
+`structure`, `text` (and later geometry and style) are imported at the bottom of this file.
+"""
+
+import json
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+from pptx.oxml.ns import qn
+
+from .. import cli
+from ..brief import DEFAULT_RULES, load_brief
+from ..deckdir import find_deck_dir, load_deck
+from ..errors import PptxSkillsError
+from ..inventory import inventory
+from ..opc import open_presentation
+
+CATEGORIES = ("structure", "text", "geometry", "style")
+SEVERITIES = ("error", "warning", "info")
+
+
+@dataclass
+class Finding:
+    rule: str
+    category: str
+    severity: str
+    slide: int | None
+    slide_id: int | None
+    shape_id: int | None
+    shape: str | None
+    message: str
+    fix: str
+
+
+@dataclass
+class Rule:
+    rule_id: str
+    category: str
+    severity: str
+    func: object
+    scope: str = "slide"
+
+
+RULES: list[Rule] = []
+
+
+def rule(rule_id: str, category: str, severity: str, scope: str = "slide"):
+    """Register a rule; scope "deck" rules run once with `slide=None`."""
+    assert category in CATEGORIES and severity in SEVERITIES and scope in ("slide", "deck")
+
+    def decorate(func):
+        RULES.append(Rule(rule_id, category, severity, func, scope))
+        return func
+
+    return decorate
+
+
+@dataclass
+class SlideView:
+    """One slide under check: its python-pptx slide, number, id and inventory entry."""
+
+    number: int
+    id: int
+    pptx: object
+    info: dict
+
+    def shapes(self):
+        """(inventory shape dict, python-pptx shape) for every shape, groups flattened."""
+        by_id = {}
+
+        def walk(shapes):
+            for shape in shapes:
+                by_id[shape.shape_id] = shape
+                if shape._element.tag == qn("p:grpSp"):
+                    walk(shape.shapes)
+
+        walk(self.pptx.shapes)
+
+        def flat(items):
+            for item in items:
+                yield item
+                yield from flat(item["children"])
+
+        for item in flat(self.info["shapes"]):
+            if item["id"] in by_id:
+                yield item, by_id[item["id"]]
+
+
+@dataclass
+class Context:
+    prs: object
+    path: Path
+    rules: dict
+    content_area: list[float] | None
+    deck: dict = field(default_factory=dict)
+    _current: Rule | None = None
+
+    def finding(self, slide: SlideView | None, shape: dict | None, message: str, fix: str) -> Finding:
+        rule_ = self._current
+        return Finding(
+            rule=rule_.rule_id,
+            category=rule_.category,
+            severity=rule_.severity,
+            slide=slide.number if slide else None,
+            slide_id=slide.id if slide else None,
+            shape_id=shape["id"] if shape else None,
+            shape=shape["name"] if shape else None,
+            message=message,
+            fix=fix,
+        )
+
+
+def _resolve(deck_path: Path) -> tuple[Path, Path | None]:
+    """(pptx file, deck folder or None) for a .pptx file or a deck folder."""
+    deck_path = Path(deck_path)
+    if deck_path.is_dir():
+        deck = load_deck(deck_path)
+        return deck_path / deck["working_copy"], deck_path
+    return deck_path, find_deck_dir(deck_path)
+
+
+def _selected(prs, deck: dict, slides, all_slides: bool) -> list[int]:
+    count = len(prs.slides)
+    if slides:
+        bad = [n for n in slides if not 1 <= n <= count]
+        if bad:
+            raise PptxSkillsError(f"slide {bad[0]} does not exist; the deck has {count} slides")
+        return sorted(set(slides))
+    if not all_slides:
+        ids = {s.slide_id: n for n, s in enumerate(prs.slides, 1)}
+        touched = sorted(ids[i] for i in deck.get("last_touched", []) if i in ids)
+        if touched:
+            return touched
+    return list(range(1, count + 1))
+
+
+def run_checks(deck_path: Path, slides: list[int] | None = None, all_slides: bool = False) -> dict:
+    path, deck_dir = _resolve(deck_path)
+    prs = open_presentation(path)
+    deck = load_deck(deck_dir) if deck_dir else {}
+    brief = load_brief(deck_dir) if deck_dir else None
+    rules = {**DEFAULT_RULES, **((brief or {}).get("rules") or {})}
+    ctx = Context(prs, path, rules, (brief or {}).get("content_area") or None, deck)
+    numbers = _selected(prs, deck, slides, all_slides)
+    inv = inventory(prs, numbers)
+    views = [SlideView(s["number"], s["id"], prs.slides[s["number"] - 1], s) for s in inv["slides"]]
+
+    findings: list[Finding] = []
+    for item in RULES:
+        ctx._current = item
+        if item.scope == "deck":
+            findings.extend(item.func(ctx, None))
+        else:
+            for view in views:
+                findings.extend(item.func(ctx, view))
+    summary = {s: sum(f.severity == s for f in findings) for s in SEVERITIES}
+    report = {
+        "deck": str(path),
+        "slides": numbers,
+        "findings": [asdict(f) for f in sorted(findings, key=lambda f: (f.slide or 0, SEVERITIES.index(f.severity)))],
+        "summary": summary,
+    }
+    if deck_dir:
+        _write_slide_reports(deck_dir, views, report["findings"])
+    return report
+
+
+def _write_slide_reports(deck_dir: Path, views: list[SlideView], findings: list[dict]) -> None:
+    out = Path(deck_dir) / "check"
+    out.mkdir(exist_ok=True)
+    for view in views:
+        data = {"slide": view.number, "slide_id": view.id, "findings": [f for f in findings if f["slide"] == view.number]}
+        (out / f"slide-{view.number:02d}.json").write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def format_report(report: dict) -> str:
+    lines = []
+    for f in report["findings"]:
+        where = f"slide {f['slide']}" if f["slide"] else "deck"
+        if f["shape"]:
+            where += f" [{f['shape']}]"
+        lines.append(f"{where} {f['severity']} {f['rule']}: {f['message']} — {f['fix']}")
+    s = report["summary"]
+    shown = ",".join(str(n) for n in report["slides"])
+    lines.append(f"Checked slides {shown}: {s['error']} errors, {s['warning']} warnings, {s['info']} info.")
+    return "\n".join(lines)
+
+
+def _handle(args) -> int:
+    slides = None
+    if args.slides:
+        try:
+            slides = [int(n) for n in args.slides.split(",")]
+        except ValueError:
+            raise PptxSkillsError(f"--slides expects numbers like 1,3, got {args.slides!r}") from None
+    report = run_checks(Path(args.deck), slides, args.all)
+    cli.emit(args, report, format_report(report))
+    s = report["summary"]
+    return cli.FINDINGS if s["error"] or (args.strict and s["warning"]) else cli.OK
+
+
+def register(subparsers) -> None:
+    parser = subparsers.add_parser("check", help="Run the deterministic slide checks.")
+    parser.add_argument("deck", help="deck folder or .pptx file")
+    parser.add_argument("--slides", help="comma-separated slide numbers (default: slides touched last, else all)")
+    parser.add_argument("--all", action="store_true", help="check every slide")
+    parser.add_argument("--strict", action="store_true", help="exit 1 on warnings too")
+    parser.add_argument("--json", action="store_true", help="machine-readable output")
+    parser.set_defaults(handler=_handle)
+
+
+from . import structure, text  # noqa: E402,F401  (register the rules)
