@@ -158,3 +158,29 @@ def test_notes(blank):
     apply(blank, [{"op": "set_notes", "slide": 1, "text": "One\nTwo"}])
     frame = open_presentation(blank).slides[0].notes_slide.notes_text_frame
     assert [p.text for p in frame.paragraphs] == ["One", "Two"]
+
+
+@pytest.fixture
+def no_notes_body(make_deck):
+    """A slide whose notes page has no body placeholder, because the notes master has none."""
+
+    def build(prs):
+        master = prs.notes_master
+        for ph in list(master.placeholders):
+            if ph.placeholder_format.type.name == "BODY":
+                ph._element.getparent().remove(ph._element)
+        slide = prs.slides.add_slide(layout_named(prs, "Blank"))
+        assert slide.notes_slide.notes_text_frame is None
+
+    return make_deck(build, name="no-notes-body.pptx")
+
+
+def test_notes_page_without_body_placeholder(no_notes_body, capsys):
+    from pptx_skills.checks import run_checks
+    from pptx_skills.cli import main
+
+    assert inventory(open_presentation(no_notes_body))["slides"][0]["notes"] == ""
+    assert run_checks(no_notes_body)["summary"]["error"] == 0
+    with pytest.raises(PptxSkillsError, match="op 1 .set_notes.: .*no body placeholder"):
+        apply(no_notes_body, [{"op": "set_notes", "slide": 1, "text": "Say this"}])
+    assert main(["inventory", str(no_notes_body)]) == 0

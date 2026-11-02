@@ -78,3 +78,32 @@ def test_open_rejects_zip_without_package_parts(tmp_path):
         z.writestr("a.txt", "hello")
     with pytest.raises(PptxSkillsError, match="cannot be read"):
         open_presentation(tmp_path / "junk.pptx")
+
+
+def test_unexpected_errors_exit_2_without_traceback(capsys, monkeypatch):
+    def bug(args):
+        raise ValueError("boom")
+
+    monkeypatch.delenv("PPTX_SKILLS_DEBUG", raising=False)
+    assert run_handler(bug, argparse.Namespace()) == 2
+    err = capsys.readouterr().err
+    assert err == "error: unexpected ValueError: boom\n"
+    monkeypatch.setenv("PPTX_SKILLS_DEBUG", "1")
+    assert run_handler(bug, argparse.Namespace()) == 2
+    err = capsys.readouterr().err
+    assert "Traceback" in err and err.rstrip().endswith("error: unexpected ValueError: boom")
+
+
+def test_corrupt_slide_xml_is_exit_2(tmp_path, deck_with_two_slides, capsys, monkeypatch):
+    import zipfile
+
+    monkeypatch.delenv("PPTX_SKILLS_DEBUG", raising=False)
+    broken = tmp_path / "broken.pptx"
+    with zipfile.ZipFile(deck_with_two_slides) as src, zipfile.ZipFile(broken, "w") as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            dst.writestr(item, b"<p:sld" if item.filename == "ppt/slides/slide1.xml" else data)
+    for command in (["inventory", str(broken)], ["check", str(broken)]):
+        assert main(command) == 2
+        err = capsys.readouterr().err
+        assert err.startswith("error: unexpected XMLSyntaxError") and "Traceback" not in err

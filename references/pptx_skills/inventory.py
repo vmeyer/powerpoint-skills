@@ -196,7 +196,8 @@ def inventory(prs, slides: list[int] | None = None) -> dict:
         slide = prs.slides[number - 1]
         title_box = _title_box(slide)
         shapes = [_shape(s, title_box) for s in slide.shapes]
-        notes = slide.notes_slide.notes_text_frame.text if slide.has_notes_slide else ""
+        frame = slide.notes_slide.notes_text_frame if slide.has_notes_slide else None  # None: no body placeholder
+        notes = frame.text if frame is not None else ""
         result.append(
             {
                 "number": number,

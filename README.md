@@ -79,6 +79,9 @@ uv run pptx doctor
 
 `pptx doctor` reports what is missing (LibreOffice, poppler, fonts used by your master).
 
+Every command reports a problem as `error: <message>` and exits with 2 (1 means `check` found errors). For an
+unexpected error, set `PPTX_SKILLS_DEBUG=1` to also print the Python traceback.
+
 ## Customization
 
 Slides follow a **style source**. Use any of these, alone or combined:

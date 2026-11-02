@@ -327,3 +327,17 @@ def test_zoom_target_cannot_be_deleted(make_deck):
     apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 3}]})  # not a zoom target
     apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 1}, {"op": "delete_slide", "slide": 1}]})  # zoom first
     assert _unique_part_names(deck) and len(open_presentation(deck).slides) == 0
+
+
+def test_deck_json_without_seq_is_exit_2_and_changes_nothing(deck_dir_from_default, tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("PPTX_SKILLS_DEBUG", raising=False)
+    deck = deck_dir_from_default / "d.pptx"
+    meta = json.loads((deck_dir_from_default / "deck.json").read_text())
+    del meta["seq"]
+    (deck_dir_from_default / "deck.json").write_text(json.dumps(meta))
+    before = file_hash(deck)
+    cs = tmp_path / "cs.json"
+    cs.write_text(json.dumps({"ops": [{"op": "add_slide", "layout": "Blank"}]}))
+    assert main(["apply", str(deck), str(cs)]) == 2
+    assert capsys.readouterr().err == "error: unexpected KeyError: 'seq'\n"
+    assert file_hash(deck) == before

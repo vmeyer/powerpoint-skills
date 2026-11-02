@@ -149,5 +149,11 @@ def _add_picture(ctx: Context, spec: dict) -> None:
 @op("set_notes")
 def _set_notes(ctx: Context, spec: dict) -> None:
     slide = resolve_slide(ctx.prs, spec["slide"], ctx.last_slide)
-    slide.notes_slide.notes_text_frame.text = spec["text"]  # "\n" starts a new paragraph
+    frame = slide.notes_slide.notes_text_frame
+    if frame is None:
+        raise PptxSkillsError(
+            "the notes page of this slide has no body placeholder (its notes master has none), so there is nowhere "
+            "to write speaker notes; add the notes placeholder in PowerPoint (View > Notes Master) first"
+        )
+    frame.text = spec["text"]  # "\n" starts a new paragraph
     ctx.touched.add(slide.slide_id)

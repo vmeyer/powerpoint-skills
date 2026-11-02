@@ -3,7 +3,9 @@
 import argparse
 import importlib
 import json
+import os
 import sys
+import traceback
 from types import ModuleType
 
 from .errors import PptxSkillsError
@@ -34,10 +36,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_handler(handler, args) -> int:
+    """Run a command; every failure is `error: <message>` on stderr and exit 2 (1 stays reserved for check findings).
+
+    An unexpected exception (a bug or an odd file) is named by its type; `PPTX_SKILLS_DEBUG` adds the traceback.
+    """
     try:
         return handler(args)
     except PptxSkillsError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return ERROR
+    except Exception as exc:
+        if os.environ.get("PPTX_SKILLS_DEBUG"):
+            traceback.print_exc(file=sys.stderr)
+        print(f"error: unexpected {type(exc).__name__}: {exc}", file=sys.stderr)
         return ERROR
 
 
