@@ -77,3 +77,40 @@ def kicker_master(make_deck):
         layout.shapes._spTree.append(sp)
 
     return make_deck(build, name="kicker.pptx")
+
+
+@pytest.fixture
+def guided_master(make_deck):
+    """Widescreen default template whose master carries p15 guides: vertical 339/7340, horizontal 1094/3789."""
+    from lxml import etree
+    from pptx.util import Cm
+
+    ns = "http://schemas.microsoft.com/office/powerpoint/2012/main"
+
+    def build(prs):
+        prs.slide_width = Cm(33.87)
+        guides = "".join(f'<p15:guide id="{i}" pos="{p}"/>' for i, p in enumerate((339, 7340), 1))
+        guides += "".join(f'<p15:guide id="{i}" orient="horz" pos="{p}"/>' for i, p in enumerate((1094, 3789), 3))
+        ext = etree.fromstring(
+            '<p:extLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+            '<p:ext uri="{27BBF7A9-308A-43DC-89C8-2F10F3537804}">'
+            f'<p15:sldGuideLst xmlns:p15="{ns}">{guides}</p15:sldGuideLst></p:ext></p:extLst>'
+        )
+        prs.slide_master._element.append(ext)
+
+    return make_deck(build, name="guided.pptx")
+
+
+@pytest.fixture
+def examples_with_three_accent1_rects(make_deck):
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Cm
+
+    def build(prs):
+        slide = prs.slides.add_slide(layout_named(prs, "Blank"))
+        for i in range(3):
+            shp = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Cm(1 + i * 5), Cm(5), Cm(4), Cm(3))
+            shp.fill.solid()
+            shp.fill.fore_color.theme_color = 5  # ACCENT_1
+
+    return make_deck(build, name="examples.pptx")
