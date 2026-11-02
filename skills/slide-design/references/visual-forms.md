@@ -245,7 +245,8 @@ pptx grid decks/<slug> --cols 3 --rows 2
 1.69,10.88 9.96x6.14 | 11.95,10.88 9.96x6.14 | 22.21,10.88 9.96x6.14
 ```
 
-A key-figure tile: a large number, a bold label, one plain line.
+A key-figure tile: a large number, a bold label, one plain line. The number is the larger of the slide's two
+body sizes; label and line share the smaller one, the label set apart by weight alone.
 
 ```json
 {"label": "tiles-key-figures", "ops": [
@@ -254,7 +255,7 @@ A key-figure tile: a large number, a bold label, one plain line.
    "fill": "lt2", "line": "none", "font": {"color": "tx1"}, "align": "left", "anchor": "top", "insets": [0.4, 0.4, 0.4, 0.4],
    "paragraphs": [
      {"runs": [{"t": "-40 %", "b": true, "size": 28, "color": "accent1"}]},
-     {"runs": [{"t": "Lead time", "b": true, "size": 12}]},
+     {"runs": [{"t": "Lead time", "b": true, "size": 11}]},
      {"runs": [{"t": "from request to release, after six months", "size": 11}]}
    ]}
 ]}

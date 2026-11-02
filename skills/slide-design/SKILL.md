@@ -32,6 +32,12 @@ uv run --project <plugin-root>/references pptx <command> …
 - `<skill-dir>` is the folder that contains this SKILL.md. Your harness usually names it when it
   loads the skill; otherwise search the plugin folders for `skills/slide-design/SKILL.md`.
 - `<plugin-root>` is two levels above it, `<skill-dir>/../..`; it contains `references/pyproject.toml`.
+  An installed plugin lives in the agent's plugin cache (for Claude Code under
+  `~/.claude/plugins/cache/`), never in the user's project.
+- `uv` must be installed (`uv --version`). If it is missing, install it with `brew install uv` or
+  `curl -LsSf https://astral.sh/uv/install.sh | sh`, or ask the user to.
+- The first `uv run` installs the engine's Python packages once, which needs the network once;
+  later runs work offline. A slow first command is that install, not a hang.
 - Run every command from the user's project folder, so `decks/…` paths resolve there. Write the
   full prefix each time (shell variables may not survive between commands). Below, `pptx …`
   is short for that full command.

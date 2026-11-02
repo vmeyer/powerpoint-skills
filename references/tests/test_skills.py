@@ -4,7 +4,8 @@ import json
 import re
 from pathlib import Path
 
-from pptx_skills.changeset import _schema, validate_changeset
+from pptx_skills.brief import DEFAULT_RULES
+from pptx_skills.changeset import validate_changeset
 from pptx_skills.cli import main
 from pptx_skills.neutral import validate_style
 
@@ -101,30 +102,80 @@ def test_no_agent_specific_tool_names():
         assert not re.search(r"\b(Read|Write|Edit|Bash|Grep|Glob) tool\b", md.read_text(encoding="utf-8")), md
 
 
+_BLOCK = re.compile(r"^```([^\n]*)\n(.*?)^```", re.S | re.M)
+
+
+def _json_values(block: str) -> list:
+    """A whole block as one JSON value, or one value per line."""
+    try:
+        return [json.loads(block)]
+    except ValueError:
+        return [json.loads(line) for line in block.splitlines() if line.strip()]
+
+
 def _json_examples(text: str) -> list:
-    """Objects in ```json blocks: a whole block, or one object per line."""
+    """Objects in ```json blocks (which must parse) and in untagged blocks that are JSON (others are plain text)."""
     found = []
-    for block in re.findall(r"^```json\n(.*?)^```", text, re.S | re.M):
-        try:
-            found.append(json.loads(block))
-        except ValueError:
-            found.extend(json.loads(line) for line in block.splitlines() if line.strip())
+    for tag, block in _BLOCK.findall(text):
+        if tag.strip() == "json":
+            found.extend(_json_values(block))
+        elif not tag.strip():
+            try:
+                values = _json_values(block)
+            except ValueError:
+                continue  # grid output and the like
+            found.extend(v for v in values if isinstance(v, dict))
     return found
 
 
-def test_json_examples_validate():
-    known = {branch["title"] for branch in _schema()["properties"]["ops"]["items"]["oneOf"]}
+def _changesets(text: str) -> list[dict]:
+    """Every example change set; a lone op counts as a change set of one op."""
+    return [e if "ops" in e else {"ops": [e]} for e in _json_examples(text) if "op" in e or "ops" in e]
+
+
+def validate_examples(text: str) -> int:
+    """Validate every example (change sets against the schema, the rest as style files); returns the ops checked."""
     checked = 0
+    for example in _json_examples(text):
+        if "op" not in example and "ops" not in example:
+            validate_style(example)
+            continue
+        changeset = example if "ops" in example else {"ops": [example]}
+        validate_changeset(changeset)
+        checked += len(changeset["ops"])
+    return checked
+
+
+def test_json_examples_validate():
+    assert sum(validate_examples(md.read_text(encoding="utf-8")) for md in DOCS) >= 20
+
+
+def test_examples_with_unknown_ops_fail_also_in_untagged_blocks():
+    import pytest
+
+    from pptx_skills.errors import PptxSkillsError
+
+    for fence in ("```json", "```"):
+        with pytest.raises(PptxSkillsError, match="unknown op"):
+            validate_examples(f'{fence}\n{{"op": "add_slide", "layout": "Blank"}}\n{{"op": "distribute", "slide": 1}}\n```\n')
+    assert validate_examples("```\n1.69,4.45 9.96x6.14 | 11.95,4.45 9.96x6.14\n```\n") == 0
+
+
+_CREATES = ("add_slide", "clone_slide", "replace_slide")
+
+
+def test_examples_use_action_titles_and_create_last_first():
+    """Example titles are statements, and a move of "$last" shows the op that creates that slide."""
+    min_words = DEFAULT_RULES["title_min_words"]
     for md in DOCS:
-        for example in _json_examples(md.read_text(encoding="utf-8")):
-            if "op" not in example and "ops" not in example:  # a style file, not a change set
-                validate_style(example)
-                continue
-            changeset = example if "ops" in example else {"ops": [example]}
-            ops = [o for o in changeset["ops"] if o["op"] in known]  # ops still to come are marked as such in the text
-            validate_changeset({**changeset, "ops": ops} if ops else {"ops": [{"op": "add_slide", "layout": "x"}]})
-            checked += len(ops)
-    assert checked >= 20
+        for changeset in _changesets(md.read_text(encoding="utf-8")):
+            ops = changeset["ops"]
+            for n, spec in enumerate(ops):
+                if spec["op"] == "set_text" and spec["target"] == {"role": "title"}:
+                    text = spec.get("text") or " ".join(r.get("t", "") for p in spec["paragraphs"] for r in p["runs"])
+                    assert len(text.split()) >= min_words, f"{md.name}: topic title {text!r}"
+                if spec["op"] == "move_slide" and spec["slide"] == "$last":
+                    assert any(o["op"] in _CREATES for o in ops[:n]), f"{md.name}: move of $last without the op that creates it"
 
 
 def test_relative_links_resolve():
@@ -132,3 +183,31 @@ def test_relative_links_resolve():
         for target in _LINK.findall(md.read_text(encoding="utf-8")):
             if "://" not in target:
                 assert (md.parent / target).exists(), f"{md.name}: broken link {target}"
+
+
+def _body_sizes(changeset: dict) -> set:
+    """Font sizes a change set gives text other than kicker and title."""
+    sizes = set()
+    for spec in changeset["ops"]:
+        if spec.get("target") in ({"role": "title"}, {"role": "kicker"}):
+            continue
+        sizes |= {(spec.get("font") or {}).get("size")}
+        sizes |= {run.get("size") for p in spec.get("paragraphs", []) for run in p["runs"]}
+    return sizes - {None}
+
+
+def test_slide_skeletons_use_at_most_two_body_sizes():
+    """Design rule 10: title plus one or two body sizes; a key figure is the larger of the two."""
+    for md in DOCS:
+        for changeset in _changesets(md.read_text(encoding="utf-8")):
+            assert len(_body_sizes(changeset)) <= 2, f"{md.name}: {changeset.get('label')} uses sizes {sorted(_body_sizes(changeset))}"
+
+
+def test_setup_docs_cover_uv_the_plugin_folder_and_the_first_run():
+    """An agent can set the engine up from the README or the skill alone, also for an installed plugin."""
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    skill = (ROOT / "skills" / "slide-design" / "SKILL.md").read_text(encoding="utf-8")
+    for name, text in (("README.md", readme), ("SKILL.md", skill)):
+        for needle in ("brew install uv", "astral.sh/uv/install.sh", "plugins/cache", "network"):
+            assert needle in text, f"{name} lacks {needle!r}"
+    assert "slide size" not in readme and "Without any source" not in readme  # init needs --from or --style-file

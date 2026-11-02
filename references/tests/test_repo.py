@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-BINARY = (".pptx", ".potx", ".pptm", ".ppt", ".odp", ".png", ".jpg", ".jpeg", ".gif", ".pdf")
+IMAGES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".heic", ".tif", ".tiff", ".pdf")
+BINARY = (".pptx", ".potx", ".pptm", ".ppt", ".odp", *IMAGES)
 
 
 def tracked_files() -> list[Path]:
@@ -17,6 +18,12 @@ def tracked_files() -> list[Path]:
 
 def test_no_office_files_tracked():
     assert not [f.name for f in tracked_files() if f.suffix.lower() in BINARY]
+
+
+@pytest.mark.parametrize("name", [f"shot{ext}" for ext in IMAGES] + ["master.potx", "deck.pptx", "decks/a/a.pptx", "deck-render/slide-01.png"])
+def test_screenshots_and_office_files_are_ignored(name):
+    """Renders and screenshots next to a corporate deck in the repo root can never be staged."""
+    assert subprocess.run(["git", "check-ignore", "-q", "--no-index", name], cwd=ROOT).returncode == 0, name
 
 
 @pytest.mark.skipif(not os.environ.get("PPTX_SKILLS_DENY_WORDS"), reason="local only")

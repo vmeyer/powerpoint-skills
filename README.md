@@ -54,28 +54,37 @@ claude --plugin-dir ./powerpoint-skills
 
 ## Setup
 
-The engine renders slides with LibreOffice and poppler. Set it up once, or ask your agent: "Set up the powerpoint-skills renderer."
+Set the engine up once per machine, or ask your agent: "Set up the powerpoint-skills renderer."
 
-macOS:
+1. **uv** runs the Python engine. macOS: `brew install uv`; macOS or Linux without Homebrew, the official
+   installer: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+2. **LibreOffice and poppler** render slides to PNG.
 
-```bash
-brew install --cask libreoffice          # or without admin rights:
-brew install --cask --appdir=~/Applications libreoffice
-brew install poppler
-```
+   macOS:
 
-Linux:
+   ```bash
+   brew install --cask libreoffice          # or without admin rights:
+   brew install --cask --appdir=~/Applications libreoffice
+   brew install poppler
+   ```
 
-```bash
-sudo apt install libreoffice poppler-utils
-```
+   Linux:
 
-Then, on both:
+   ```bash
+   sudo apt install libreoffice poppler-utils
+   ```
 
-```bash
-cd references && uv sync
-uv run pptx doctor
-```
+3. **Check the setup** with the engine's `doctor` command:
+
+   ```bash
+   uv run --project <plugin-root>/references pptx doctor
+   ```
+
+`<plugin-root>` is the plugin's own folder, two levels above each skill's `SKILL.md` folder; it contains
+`references/pyproject.toml`. In a clone it is the repository root. An installed plugin lives in the Claude Code
+plugin cache, `~/.claude/plugins/cache/<marketplace>/powerpoint-skills/<version>/`. The first `uv run` installs
+the engine's Python packages (python-pptx, lxml, Pillow, jsonschema) into `references/.venv`; that needs the
+network once, and every later run works offline.
 
 `pptx doctor` reports what is missing (LibreOffice, poppler, fonts used by your master).
 
@@ -89,9 +98,10 @@ Slides follow a **style source**. Use any of these, alone or combined:
 - **Master or template** (`.potx` / `.pptx`): its layouts, placeholders, theme colors and fonts define the style.
 - **Existing deck**: a `.pptx` whose layouts are used, so a deck can be continued in its own style.
 - **Examples deck**: slides that show how the master is meant to be used; the style brief picks up their patterns.
-- **Style file** (JSON): colors, fonts and slide size for a deck without a master, see [`skills/slide-design/references/style-file.md`](skills/slide-design/references/style-file.md).
+- **Style file** (JSON): colors and fonts for a deck without a master, built on a neutral 16:9 template; see [`skills/slide-design/references/style-file.md`](skills/slide-design/references/style-file.md).
 
-The check thresholds (minimum font size, maximum bullets, snap distance, …) can be overridden under `rules` in the style file. Without any source, a neutral built-in template is used.
+The check thresholds (minimum font size, maximum bullets, snap distance, …) can be overridden under `rules` in the style file.
+`init` always needs a source: `--from` a master or deck, or `--style-file` for the neutral template.
 
 ## Output Convention
 

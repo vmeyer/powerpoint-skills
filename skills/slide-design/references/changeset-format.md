@@ -115,10 +115,13 @@ replaced: ask the user to remove the zoom in PowerPoint first.
 
 ### move_slide
 
-Moves a slide so that it ends up at the 1-based position `to`.
+Moves a slide so that it ends up at the 1-based position `to`. A new opening slide, added and moved to the front:
 
 ```json
-{"op": "move_slide", "slide": "$last", "to": 1}
+{"label": "new-opener", "ops": [
+  {"op": "add_slide", "layout": "Title Only"},
+  {"op": "move_slide", "slide": "$last", "to": 1}
+]}
 ```
 
 In decks with sections, an added, cloned or moved slide joins the section of the slide it now follows (the
@@ -215,7 +218,7 @@ Line break inside a paragraph: a run `{"br": true}` (the inventory form `{"t": "
 `font` (`size`, `color`, `bold`) applies to every run; a run's own `b`, `size` or `color` wins.
 
 ```json
-{"op": "set_text", "slide": 1, "target": {"role": "title"}, "text": "Quarterly review", "font": {"size": 32, "color": "tx2"}}
+{"op": "set_text", "slide": 1, "target": {"role": "title"}, "text": "Revenue grew in every region this quarter", "font": {"size": 32, "color": "tx2"}}
 ```
 
 Kicker (the small label above the title), where the master has one. Write it in normal case; a master that
@@ -255,8 +258,11 @@ rejected unless the op sets `"allow_rgb": true`. Boxes are `[x, y, w, h]` in cm 
 | `align` | `left`, `center` or `right` |
 | `anchor` | `top`, `middle` or `bottom` |
 | `insets` | `[l, t, r, b]` in cm, the space between the shape's edge and its text |
-| `radius` | 0-0.5, corner rounding of a `roundRect` |
+| `radius` | 0-0.5, corner rounding of a `roundRect` as a fraction of its shorter side (see below) |
 | `allow_rgb` | `true` to accept `#RRGGBB` |
+
+The style brief lists the examples' corner radii in cm. Convert one to `radius` with
+`radius = corner_cm / min(w, h)`: a 0.3 cm corner on a 9.96 x 6.14 cm box is 0.3 / 6.14 = 0.05.
 
 An added shape shows only what the op sets: no fill, no line, no shadow. Its text gets the master's default
 text style (often 18 pt) and, in every shape but `textbox`, is centered horizontally and vertically. So set
