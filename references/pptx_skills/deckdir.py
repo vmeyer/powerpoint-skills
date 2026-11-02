@@ -3,6 +3,7 @@
 import json
 import re
 import shutil
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,9 +25,27 @@ def load_deck(deck_dir: Path) -> dict:
     if not path.is_file():
         raise PptxSkillsError(f"{deck_dir} is not a deck folder (no deck.json); run `pptx init` first")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        deck = json.loads(path.read_text(encoding="utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
         raise PptxSkillsError(f"{path} is not valid JSON") from exc
+    _validate(Path(deck_dir), deck, path)
+    return deck
+
+
+def _validate(deck_dir: Path, deck, path: Path) -> None:
+    name = deck.get("working_copy") if isinstance(deck, dict) else None
+    ok = (
+        isinstance(name, str)
+        and name.endswith(".pptx")
+        and name not in (".", "..")
+        and "/" not in name
+        and "\\" not in name
+        and (deck_dir / name).resolve().parent == deck_dir.resolve()
+    )
+    if not ok:
+        raise PptxSkillsError(f"{path} has an invalid working_copy; it must be a file name inside the deck folder")
+    if not isinstance(deck.get("sources"), dict):
+        raise PptxSkillsError(f"{path} has invalid sources; expected an object")
 
 
 def _save_deck(deck_dir: Path, deck: dict) -> None:
@@ -67,9 +86,10 @@ def refresh_brief(deck_dir: Path, deck: dict) -> dict:
     return brief
 
 
-def _clear(deck_dir: Path, deck: dict | None) -> None:
-    if deck is not None:
-        (deck_dir / deck["working_copy"]).unlink(missing_ok=True)
+def _clear(deck_dir: Path, deck: dict | None, working_copy: str | None = None) -> None:
+    name = deck["working_copy"] if deck is not None else working_copy
+    if name:
+        (deck_dir / name).unlink(missing_ok=True)
     _deck_json(deck_dir).unlink(missing_ok=True)
     for name in _OWNED:
         shutil.rmtree(deck_dir / name, ignore_errors=True)
@@ -101,28 +121,39 @@ def init_deck(
         raise PptxSkillsError("decks from a style file alone are not supported yet")
 
     slug = deck_dir.name
-    working_copy = deck_dir / f"{slug}.pptx"
-    prs = open_presentation(source)  # fail before touching the folder
+    working_copy = f"{slug}.pptx"
+    if mode != "replace":
+        clash = [n for n in (working_copy, *_OWNED) if (deck_dir / n).exists()]
+        if clash:
+            raise PptxSkillsError(f"{deck_dir} already contains {', '.join(clash)}; use --replace to start over")
+    prs = open_presentation(source)  # validate every input before touching the folder
     if examples is not None:
         open_presentation(examples)
-    if mode == "replace" and exists:
-        _clear(deck_dir, load_deck(deck_dir))
-    deck_dir.mkdir(parents=True, exist_ok=True)
+    _style_rules(_abs(style_file))
     if not keep_slides:
         for slide in list(prs.slides):
             delete_slide(prs, slide)
-    last_hash = save_presentation(prs, working_copy)
-    deck = {
-        "slug": slug,
-        "working_copy": working_copy.name,
-        "sources": {"master": _abs(source), "examples": _abs(examples), "style_file": _abs(style_file)},
-        "keep_slides": keep_slides,
-        "last_hash": last_hash,
-        "seq": 0,
-        "last_touched": [],
-    }
-    refresh_brief(deck_dir, deck)
-    _save_deck(deck_dir, deck)
+    deck_dir.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=f".{slug}-init-", dir=deck_dir.parent))
+    try:
+        deck = {
+            "slug": slug,
+            "working_copy": working_copy,
+            "sources": {"master": _abs(source), "examples": _abs(examples), "style_file": _abs(style_file)},
+            "keep_slides": keep_slides,
+            "last_hash": save_presentation(prs, stage / working_copy),
+            "seq": 0,
+            "last_touched": [],
+        }
+        refresh_brief(stage, deck)
+        _save_deck(stage, deck)
+        deck_dir.mkdir(parents=True, exist_ok=True)
+        if mode == "replace":
+            _clear(deck_dir, None, working_copy)
+        for item in stage.iterdir():
+            shutil.move(str(item), str(deck_dir / item.name))
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
     return deck
 
 

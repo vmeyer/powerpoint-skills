@@ -137,3 +137,103 @@ def test_cli_init_and_style(tmp_path, potx_file, capsys):
     assert (d / "style/brief.json").exists()
     assert main(["init", str(tmp_path / "e")]) == 2
     assert main(["init", "--help"]) == 0
+
+
+def test_load_deck_rejects_escaping_working_copy(tmp_path, potx_file):
+    d = tmp_path / "deck"
+    init_deck(d, potx_file)
+    victim = tmp_path / "victim.pptx"
+    victim.write_text("keep")
+    meta = json.loads((d / "deck.json").read_text())
+    for bad in ("../victim.pptx", str(victim), "sub/x.pptx", "x.txt"):
+        meta["working_copy"] = bad
+        (d / "deck.json").write_text(json.dumps(meta))
+        with pytest.raises(PptxSkillsError, match="working_copy"):
+            load_deck(d)
+        with pytest.raises(PptxSkillsError):
+            changed_externally(d)
+    meta["working_copy"] = "deck.pptx"
+    meta["sources"] = []
+    (d / "deck.json").write_text(json.dumps(meta))
+    with pytest.raises(PptxSkillsError, match="sources"):
+        load_deck(d)
+    assert victim.read_text() == "keep"
+
+
+def test_invalid_style_file_keeps_old_deck_on_replace(tmp_path, potx_file):
+    d = tmp_path / "keep"
+    init_deck(d, potx_file)
+    before = (d / "deck.json").read_bytes(), file_hash(d / "keep.pptx")
+    bad = tmp_path / "bad.json"
+    bad.write_text("{nope")
+    with pytest.raises(PptxSkillsError, match="not valid JSON"):
+        init_deck(d, potx_file, style_file=bad, mode="replace")
+    assert ((d / "deck.json").read_bytes(), file_hash(d / "keep.pptx")) == before
+    assert (d / "style/brief.json").exists()
+
+
+def test_invalid_style_file_leaves_no_partial_folder(tmp_path, potx_file):
+    bad = tmp_path / "bad.json"
+    bad.write_text("{nope")
+    with pytest.raises(PptxSkillsError):
+        init_deck(tmp_path / "new", potx_file, style_file=bad)
+    assert not (tmp_path / "new").exists()
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".")] == []
+
+
+def test_init_refuses_to_overwrite_existing_working_copy(tmp_path, potx_file):
+    d = tmp_path / "w"
+    d.mkdir()
+    (d / "w.pptx").write_text("precious")
+    with pytest.raises(PptxSkillsError, match="--replace"):
+        init_deck(d, potx_file)
+    assert (d / "w.pptx").read_text() == "precious"
+    init_deck(d, potx_file, mode="replace")
+    assert len(open_presentation(d / "w.pptx").slides) == 0
+
+
+def _with_sections(prs):
+    from lxml import etree
+
+    p14 = "http://schemas.microsoft.com/office/powerpoint/2010/main"
+    from conftest import layout_named
+
+    for text in ("A", "B", "C"):
+        prs.slides.add_slide(layout_named(prs, "Title Only")).shapes.title.text = text
+    ids = [s.slide_id for s in prs.slides]
+    rids = [e.rId for e in prs.slides._sldIdLst]
+    sections = (
+        f'<p14:section name="One" id="{{11111111-1111-1111-1111-111111111111}}"><p14:sldIdLst><p14:sldId id="{ids[0]}"/></p14:sldIdLst></p14:section>'
+        f'<p14:section name="Two" id="{{22222222-2222-2222-2222-222222222222}}"><p14:sldIdLst><p14:sldId id="{ids[1]}"/><p14:sldId id="{ids[2]}"/></p14:sldIdLst></p14:section>'
+    )
+    ext = etree.fromstring(
+        '<p:extLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+        '<p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}">'
+        f'<p14:sectionLst xmlns:p14="{p14}">{sections}</p14:sectionLst></p:ext></p:extLst>'
+    )
+    root = prs.part._element
+    root.append(ext)
+    show = etree.fromstring(
+        '<p:custShowLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        f'<p:custShow name="S" id="0"><p:sldLst><p:sld r:id="{rids[0]}"/><p:sld r:id="{rids[1]}"/></p:sldLst></p:custShow></p:custShowLst>'
+    )
+    root.find("{http://schemas.openxmlformats.org/presentationml/2006/main}sldIdLst").addnext(show)
+
+
+def test_delete_slide_cleans_sections_and_custom_shows(make_deck, tmp_path):
+    from lxml import etree
+
+    path = make_deck(_with_sections, name="sec.pptx")
+    prs = open_presentation(path)
+    gone, rid = prs.slides[0].slide_id, prs.slides._sldIdLst[0].rId
+    delete_slide(prs, prs.slides[0])
+    xml = etree.tostring(prs.part._element).decode()
+    assert f'id="{gone}"' not in xml and f'r:id="{rid}"' not in xml
+    for slide in list(prs.slides):
+        delete_slide(prs, slide)
+    xml = etree.tostring(prs.part._element).decode()
+    assert xml.count("<p14:section ") == 2 and "<p14:sldId " not in xml and "<p:sld " not in xml
+    out = tmp_path / "o.pptx"
+    prs.save(str(out))
+    assert len(open_presentation(out).slides) == 0
