@@ -39,6 +39,10 @@ Habits that keep scripts short and slides editable:
 - Prefer theme colors; they follow `pptx theme` and the master. `#RRGGBB` is fine for a one-off accent.
 - Name the shapes (`shape.name = "kpi-value"`) so later change sets can target them.
 - Text in a new text box or shape: set `word_wrap`, size, color and alignment yourself.
+- `slide.shapes.build_freeform(x, y, scale=cm(1))` puts the pen on the first vertex `(x, y)`;
+  `add_line_segments` continues from there, `convert_to_shape(left, top)` places the drawing on the slide.
+- Find a shape by name with `next(s for s in slide.shapes if s.name == "house")`. To delete shapes, prefer
+  `delete_shape` in a change set, which also removes their animations.
 - The slide is `prs.slide_width` × `prs.slide_height` EMU (33.87 × 19.05 cm for 16:9); `brief["content_area"]`
   is `[x, y, w, h]` in cm.
 

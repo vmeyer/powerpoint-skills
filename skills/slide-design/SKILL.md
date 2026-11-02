@@ -43,7 +43,7 @@ Everything runs through `pptx`, shipped with this plugin: `uv run --project <plu
 
 | The user has … | Do |
 |---|---|
-| no master | `pptx init decks/<slug>`: a neutral 16:9 deck. Set a palette and fonts that fit the topic (or the user's wishes): `pptx theme decks/<slug> --color accent1=#0B5CAD --color accent2=#F2A900 --font major=Georgia --font minor=Arial` |
+| no master | `pptx init decks/<slug>`: a neutral 16:9 deck whose layouts include `Title Only` and `Blank`. Set a palette and fonts that fit the topic (or the user's wishes): `pptx theme decks/<slug> --color accent1=#0B5CAD --color accent2=#F2A900 --font major=Georgia --font minor=Arial` |
 | a master or template | `pptx init decks/<slug> --from <master.potx>`, then read `decks/<slug>/style/brief.md` (layouts, theme colors, sizes). Keep its theme; change it with `pptx theme` only when the user asks |
 | a deck to continue | `pptx init decks/<slug> --from <deck.pptx> --keep-slides` |
 | slides showing the style in use | add `--examples <examples.pptx>`; reuse a slide with `clone_slide` from `"examples"` |
