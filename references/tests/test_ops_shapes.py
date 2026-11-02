@@ -6,7 +6,7 @@ from conftest import layout_named
 from pptx_skills.changeset import apply_changeset, resolve_shape
 from pptx_skills.deckdir import init_deck
 from pptx_skills.errors import PptxSkillsError
-from pptx_skills.geometry import Box, snap_box
+from pptx_skills.geometry import Box, snap_box, visual_box
 from pptx_skills.inventory import inventory
 from pptx_skills.opc import open_presentation
 
@@ -138,6 +138,35 @@ def test_round_rect_radius_and_presets(deck):
     assert prst == "homePlate"
     with pytest.raises(PptxSkillsError, match="roundRect"):
         apply(deck, [{"op": "update_shape", "slide": 1, "target": {"name": "hp"}, "radius": 0.2}])
+
+
+def test_rotation_turns_the_frame_about_its_centre(deck):
+    # a vertical axis band: the frame is 10 x 1 cm, turned 270° it shows as 1 x 10 cm pointing up
+    apply(deck, [{"op": "add_shape", "slide": 1, "name": "axis", "shape": "homePlate", "box": [-2.5, 9.5, 10, 1],
+                  "rotation": 270, "text": "Control"}])
+    axis = shape_named(deck, "axis")
+    assert axis.rotation == 270 and inv_shape(deck, "axis")["rotation"] == 270
+    assert visual_box(axis) == Box(2, 5, 1, 10)
+
+
+def test_update_shape_sets_and_resets_rotation(deck):
+    apply(deck, [{"op": "add_shape", "slide": 1, "name": "s", "shape": "rect", "box": [2, 2, 5, 3]}])
+    apply(deck, [{"op": "update_shape", "slide": 1, "target": {"name": "s"}, "rotation": 90}])
+    assert inv_shape(deck, "s")["rotation"] == 90
+    apply(deck, [{"op": "update_shape", "slide": 1, "target": {"name": "s"}, "rotation": 0}])
+    assert inv_shape(deck, "s")["rotation"] == 0
+
+
+def test_rotation_outside_a_full_turn_is_rejected(deck):
+    for rotation in (-90, 360):
+        with pytest.raises(PptxSkillsError, match="add_shape"):
+            apply(deck, [{"op": "add_shape", "slide": 1, "name": "x", "shape": "rect", "box": [1, 1, 2, 2], "rotation": rotation}])
+
+
+def test_line_cannot_be_rotated(deck):
+    apply(deck, [{"op": "add_line", "slide": 1, "name": "l", "from": [2, 2], "to": [6, 2], "color": "dk1", "width_pt": 1}])
+    with pytest.raises(PptxSkillsError, match="a line only takes"):
+        apply(deck, [{"op": "update_shape", "slide": 1, "target": {"name": "l"}, "rotation": 90}])
 
 
 def test_line_with_arrowhead_dash_and_snap(deck_with_guides):

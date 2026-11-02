@@ -102,6 +102,7 @@
               "anchor": {"enum": ["top", "middle", "bottom"]},
               "insets": {"type": "array", "items": {"type": "number", "minimum": 0}, "minItems": 4, "maxItems": 4},
               "radius": {"type": "number", "minimum": 0, "maximum": 0.5},
+              "rotation": {"type": "number", "minimum": 0, "exclusiveMaximum": 360},
               "allow_rgb": {"type": "boolean"}
             }
           },
@@ -235,6 +236,7 @@
               "anchor": {"enum": ["top", "middle", "bottom"]},
               "insets": {"type": "array", "items": {"type": "number", "minimum": 0}, "minItems": 4, "maxItems": 4},
               "radius": {"type": "number", "minimum": 0, "maximum": 0.5},
+              "rotation": {"type": "number", "minimum": 0, "exclusiveMaximum": 360},
               "allow_rgb": {"type": "boolean"}
             }
           },

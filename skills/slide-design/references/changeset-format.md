@@ -259,6 +259,7 @@ rejected unless the op sets `"allow_rgb": true`. Boxes are `[x, y, w, h]` in cm 
 | `anchor` | `top`, `middle` or `bottom` |
 | `insets` | `[l, t, r, b]` in cm, the space between the shape's edge and its text |
 | `radius` | 0-0.5, corner rounding of a `roundRect` as a fraction of its shorter side (see below) |
+| `rotation` | degrees clockwise, 0 to under 360; turns the shape and its text about the centre of `box` |
 | `allow_rgb` | `true` to accept `#RRGGBB` |
 
 The style brief lists the examples' corner radii in cm. Convert one to `radius` with
@@ -303,6 +304,17 @@ Axis band with an arrow tip:
  "align": "left", "anchor": "middle", "insets": [0.3, 0, 0.6, 0]}
 ```
 
+Vertical axis band pointing up, its text reading upwards: the same `homePlate`, turned with `rotation`.
+`box` is the frame before the turn, as `pptx inventory` lists it next to `rotation`. For a band that should
+show at `[x, y, w, h]`, pass `box` `[x + (w − h) / 2, y + (h − w) / 2, h, w]` and `"rotation": 270`
+(`90` points it down). The band below shows at `[1.69, 5.65, 0.9, 11.37]`:
+
+```json
+{"op": "add_shape", "slide": 1, "name": "axis-control", "shape": "homePlate", "box": [-3.55, 10.89, 11.37, 0.9],
+ "rotation": 270, "fill": "accent1", "line": "none", "text": "**Quality of control**", "font": {"size": 12, "color": "lt1"},
+ "align": "left", "anchor": "middle", "insets": [0.3, 0, 0.6, 0]}
+```
+
 Badge:
 
 ```json
@@ -322,8 +334,8 @@ shapes. `head` is the start, `tail` the end; each `none`, `triangle` or `arrow`.
 ### update_shape
 
 Takes any `add_shape` field except `shape`, plus `name` to rename. `text` or `paragraphs` replace the text (as in
-`set_text`); `font` alone restyles the existing runs. Lines accept only `name` and `line`; delete and re-add a
-line to move it. Boxes of shapes inside a group cannot be changed; ungroup first.
+`set_text`); `font` alone restyles the existing runs; `"rotation": 0` turns a shape back. Lines accept only
+`name` and `line`; delete and re-add a line to move it. Boxes of shapes inside a group cannot be changed; ungroup first.
 
 ```json
 {"op": "update_shape", "slide": 1, "target": {"name": "badge-1"}, "box": [2, 3, 1, 1], "fill": "accent3"}

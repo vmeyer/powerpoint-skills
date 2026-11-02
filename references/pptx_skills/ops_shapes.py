@@ -167,6 +167,8 @@ def _add_shape(ctx: Context, spec: dict) -> None:
     else:
         shape = slide.shapes.add_shape(_PRESETS[kind], Cm(box.x), Cm(box.y), Cm(box.w), Cm(box.h))
     shape.name = spec["name"]
+    if "rotation" in spec:
+        shape.rotation = spec["rotation"]
     style = shape._element.find(qn("p:style"))
     if style is not None:  # unstyled shapes have no fill, line or effects and inherit the default text style
         shape._element.remove(style)
@@ -200,7 +202,7 @@ def _is_connector(shape) -> bool:
 def _update_shape(ctx: Context, spec: dict) -> None:
     slide = resolve_slide(ctx.prs, spec["slide"], ctx.last_slide)
     shape = resolve_shape(slide, spec["target"])
-    if _is_connector(shape) and set(spec) & {"box", "fill", "pattern", "text", "paragraphs", "radius", "align", "anchor", "insets"}:
+    if _is_connector(shape) and set(spec) & {"box", "rotation", "fill", "pattern", "text", "paragraphs", "radius", "align", "anchor", "insets"}:
         raise PptxSkillsError("a line only takes name, line and allow_rgb; delete it and add a new line to move it")
     if "name" in spec and spec["name"] != shape.name:
         _check_name(slide, spec["name"])
@@ -209,6 +211,8 @@ def _update_shape(ctx: Context, spec: dict) -> None:
         if shape._element.getparent().tag == qn("p:grpSp"):
             raise PptxSkillsError(f'shape "{shape.name}" is inside a group; ungroup it before changing its box')
         _place(shape, _snapped(ctx, spec["box"]))
+    if "rotation" in spec:
+        shape.rotation = spec["rotation"]
     if (set(spec) & {"text", "paragraphs", "align", "anchor", "insets"}) and not shape.has_text_frame:
         raise PptxSkillsError(f'shape {shape.shape_id} "{shape.name}" has no text frame')
     if shape.shape_type is not None and shape.shape_type.name == "GROUP" and set(spec) & set(_STYLE_FIELDS):

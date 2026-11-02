@@ -106,6 +106,12 @@ A cell that spans two columns takes x of the first and w = right edge of the sec
 first (8.09 + 0.3 + 8.1 = 16.49). A badge ("Today") is a small `roundRect` in the highlight color
 on the cell's top edge; a path between cells is an `add_line` with `"tail": "triangle"`.
 
+When the rows are a scale too, give them an axis band of their own, made like the one across the
+columns so both axes look alike: the same `homePlate` with `"rotation": 270`, 0.9 cm wide, left of
+the row headers and as tall as the rows, just as the top band is as wide as the columns. The row headers and the lead-in then
+move right by 1.2 cm and lose that width. How to turn a box is under `add_shape` in
+[changeset-format.md](changeset-format.md).
+
 ## Process and chevrons
 
 **Use when** the argument is a sequence: steps that build on each other, phases, a flow that ends
