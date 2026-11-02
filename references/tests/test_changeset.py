@@ -488,3 +488,14 @@ def test_allocate_slide_id_falls_back_below_the_limit(deck_with_two_slides):
     assert slides.allocate_slide_id(prs, id_list[-1], 600) is not None and id_list[-1].id == 257
     id_list[1].id = 400
     assert slides.allocate_slide_id(prs, id_list[-1], 600) is None and id_list[-1].id == 601
+
+
+def test_a_working_copy_another_deck_started_from_stays_writable(tmp_path, monkeypatch, default_pptx):
+    from pptx_skills.deckdir import init_deck
+
+    monkeypatch.chdir(tmp_path)
+    init_deck(tmp_path / "decks/x", default_pptx)
+    apply_changeset(tmp_path / "decks/x/x.pptx", ADD)
+    init_deck(tmp_path / "decks/y", tmp_path / "decks/x/x.pptx", keep_slides=True)  # a variant of deck x
+    apply_changeset(tmp_path / "decks/x/x.pptx", ADD)
+    assert len(open_presentation(tmp_path / "decks/x/x.pptx").slides) == 2

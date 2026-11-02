@@ -137,21 +137,26 @@ def _run(ctx: Context, ops: list) -> None:
             raise PptxSkillsError(f"op {number} ({spec['op']}): unexpected {type(exc).__name__}: {exc}") from exc
 
 
-def _check_target(deck_path: Path, is_working_copy: bool, outside_deck: bool) -> None:
+def _check_target(deck_path: Path, deck: dict | None, outside_deck: bool) -> None:
     """Refuse to write anything but a working copy (R28): never a template or a deck's style source, and any
-    other file only with `outside_deck`."""
+    other file only with `outside_deck`. `deck` is the deck.json of the folder whose working copy this is."""
     if deck_path.suffix.lower() == ".potx":
         raise PptxSkillsError(
             f"{deck_path} is a template, and apply never writes a .potx; start a deck from it with "
             f"`pptx init decks/<slug> --from {deck_path}` and apply the change set to its working copy"
         )
+    target = deck_path.resolve()
+    if deck is not None:  # a working copy: only its own deck's sources count (another deck may start from it)
+        if any(src and Path(src).resolve() == target for src in deck["sources"].values()):
+            raise PptxSkillsError(f"{deck_path} is also a style source of its own deck folder; apply never writes a source")
+        return
     owner = deck_using_as_source(deck_path)
     if owner is not None:
         raise PptxSkillsError(
             f"{deck_path} is a style source of the deck folder {owner}, and apply never writes the user's original; "
             f"apply the change set to that deck's working copy instead"
         )
-    if not is_working_copy and not outside_deck:
+    if not outside_deck:
         raise PptxSkillsError(
             f"{deck_path} is not the working copy of a deck folder, and apply writes only working copies so the "
             f"user's own file stays untouched; start a deck from it with `pptx init decks/<slug> --from {deck_path}` "
@@ -172,7 +177,7 @@ def apply_changeset(deck_path: Path, changeset: dict, outside_deck: bool = False
     deck = load_deck(deck_dir) if deck_dir else None
     if deck is not None and deck["working_copy"] != deck_path.name:
         deck_dir, deck = None, None  # a stray file next to deck.json, not the working copy
-    _check_target(deck_path, deck_dir is not None, outside_deck)
+    _check_target(deck_path, deck, outside_deck)
     messages: list[str] = []
     if deck_dir is None:
         messages.append("--outside-deck: the file was changed in place; no snapshot and no change-log entry are kept")

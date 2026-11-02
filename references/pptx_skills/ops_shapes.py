@@ -7,9 +7,9 @@ from pptx.oxml.ns import qn
 from pptx.util import Cm, Pt
 from lxml import etree
 
+from . import timing
 from .changeset import Context, _walk, op, resolve_shape
 from .colors import RGB_OPTION, apply_color, parse_color
-from . import timing
 from .errors import PptxSkillsError
 from .geometry import Box, _xfrm, snap_box
 from .ops_text import _format, _shorthand, prune_text_animation, slide_number, write_paragraphs

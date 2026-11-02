@@ -7,9 +7,9 @@ from lxml import etree
 from pptx.oxml.ns import qn
 from pptx.util import Pt
 
+from . import timing
 from .changeset import Context, op, resolve_shape
 from .colors import RGB_OPTION, apply_color, parse_color
-from . import timing
 from .errors import PptxSkillsError
 from .slides import resolve_slide
 

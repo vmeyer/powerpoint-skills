@@ -53,9 +53,9 @@ def drop_shapes(sld, shape_ids: set[int]) -> int:
     if timing is None:
         return 0
     wanted = {str(i) for i in shape_ids}
-    nodes = [_node_of(t) for t in timing.iter(qn("p:spTgt")) if t.get("spid") in wanted]
+    nodes = [n for t in timing.iter(qn("p:spTgt")) if t.get("spid") in wanted and (n := _node_of(t)) is not None]
     builds = [b for b in timing.iter() if b.tag in _BUILDS and b.get("spid") in wanted]
-    for el in [n for n in nodes if n is not None] + builds:
+    for el in nodes + builds:
         _remove(timing, el)
     return len(nodes) + len(builds)
 
