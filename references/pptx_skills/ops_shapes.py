@@ -230,7 +230,7 @@ def _update_shape(ctx: Context, spec: dict) -> None:
     slide = resolve_slide(ctx.prs, spec["slide"], ctx.last_slide)
     shape = resolve_shape(slide, spec["target"])
     if _is_connector(shape) and set(spec) & {"box", "rotation", "fill", "pattern", "text", "paragraphs", "radius", "align", "anchor", "insets"}:
-        raise PptxSkillsError("a line only takes name, line and allow_rgb; delete it and add a new line to move it")
+        raise PptxSkillsError("a line only takes name and line; delete it and add a new line to move it")
     if "name" in spec and spec["name"] != shape.name:
         _check_name(slide, spec["name"])
         shape.name = spec["name"]

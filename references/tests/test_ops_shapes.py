@@ -162,7 +162,7 @@ def test_rotation_outside_a_full_turn_is_rejected(deck):
 
 def test_line_cannot_be_rotated(deck):
     apply(deck, [{"op": "add_line", "slide": 1, "name": "l", "from": [2, 2], "to": [6, 2], "color": "dk1", "width_pt": 1}])
-    with pytest.raises(PptxSkillsError, match="a line only takes"):
+    with pytest.raises(PptxSkillsError, match="a line only takes name and line;"):
         apply(deck, [{"op": "update_shape", "slide": 1, "target": {"name": "l"}, "rotation": 90}])
 
 

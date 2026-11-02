@@ -5,8 +5,10 @@ is written unless the script finishes, the slides are normalised (ids, sections,
 the structure rules pass; then the deck is saved atomically, with snapshot and the script in the change log.
 """
 
+import contextlib
 import copy
 import hashlib
+import sys
 import traceback
 from pathlib import Path
 
@@ -60,11 +62,30 @@ def plain(shape):
     return shape
 
 
-def _globals(ctx: Context, script: Path) -> dict:
+def _globals(ctx: Context, script: Path, expected: list) -> dict:
+    """The script's globals. `expected` is the order of the slides that existed before the script, kept current
+    by the delete and move helpers, so `_normalise` can tell their changes from the script's own."""
     prs = ctx.prs
+
+    def _slide(ref):
+        return ref if hasattr(ref, "slide_id") else slides.resolve_slide(prs, ref)
 
     def slide_by_id(slide_id: int):
         return slides.resolve_slide(prs, f"id:{slide_id}")
+
+    def delete_slide(slide) -> None:
+        """Remove a slide (a slide, a 1-based number or "id:<n>") with its sections, custom shows and the links
+        to it, as the change-set op does."""
+        target = _slide(slide)
+        part = target.part
+        slides.delete_slide(prs, target, ctx.messages)
+        expected[:] = [p for p in expected if p is not part]
+
+    def move_slide(slide, to: int) -> None:
+        """Move a slide to the 1-based position `to`; its section and the slide numbers follow."""
+        slides.move_slide(prs, _slide(slide), to)
+        kept = {id(p) for p in expected}
+        expected[:] = [s.part for s in prs.slides if id(s.part) in kept]
 
     def layout(name: str):
         return slides.layout_named(prs, name)
@@ -72,7 +93,7 @@ def _globals(ctx: Context, script: Path) -> dict:
     def add_slide(layout_name: str, after=None):
         """A slide with the layout's footer, date and number, a new id, in the right section; at the end or after
         `after` (a slide, a 1-based number or "id:<n>")."""
-        anchor = after if after is None or hasattr(after, "slide_id") else slides.resolve_slide(prs, after)
+        anchor = None if after is None else _slide(after)
         slide = slides.add_slide(prs, layout_name, anchor, ctx.max_slide_id, ctx.messages)
         ctx.max_slide_id = max(ctx.max_slide_id, slide.slide_id)
         return slide
@@ -90,6 +111,8 @@ def _globals(ctx: Context, script: Path) -> dict:
         "slide_by_id": slide_by_id,
         "layout": layout,
         "add_slide": add_slide,
+        "delete_slide": delete_slide,
+        "move_slide": move_slide,
     }
 
 
@@ -111,8 +134,36 @@ def _fingerprints(prs) -> dict[int, str]:
     return {s.slide_id: _fingerprint(s) for s in prs.slides}
 
 
+def _design_fingerprint(prs) -> str:
+    """A hash of every slide master, its layouts and its theme: a change there changes how every slide looks."""
+    digest = hashlib.sha1()
+    for master in prs.slide_masters:
+        digest.update(etree.tostring(master._element))
+        digest.update(master.part.part_related_by(RT.THEME).blob)
+        for layout in master.slide_layouts:
+            digest.update(etree.tostring(layout._element))
+    return digest.hexdigest()
+
+
 def _in_a_section(prs, slide_id: int) -> bool:
     return any(ref.get("id") == str(slide_id) for ref in prs.part._element.iter(f"{{{_P14}}}sldId"))
+
+
+def _check_kept_slides(prs, script: Path, expected: list) -> None:
+    """Refuse slides the script deleted or reordered itself: sections, custom shows and links would fall out of
+    step (R12). The helpers keep `expected` current."""
+    present = [s.part for s in prs.slides]
+    present_ids = {id(p) for p in present}
+    expected_ids = {id(p) for p in expected}
+    gone = [p for p in expected if id(p) not in present_ids]
+    order = [p for p in present if id(p) in expected_ids]
+    if gone or [id(p) for p in order] != [id(p) for p in expected]:
+        what = "deleted" if gone else "reordered"
+        raise PptxSkillsError(
+            f"{script.name} {what} slides itself, which leaves sections, custom shows and links out of step; delete "
+            "or move slides with a change set (`delete_slide`, `move_slide`) or the script helpers "
+            "`delete_slide(slide)` and `move_slide(slide, to)`; nothing was changed"
+        )
 
 
 def _normalise(ctx: Context, before: dict, floor: int) -> None:
@@ -163,27 +214,33 @@ def run_script(deck_path: Path, script: Path, outside_deck: bool = False) -> dic
         raise _failure(script, exc) from exc
     ctx = open_working_copy(deck_path, outside_deck, command="exec")
     prs = ctx.prs
-    before, floor = _fingerprints(prs), ctx.max_slide_id
+    before, floor, design = _fingerprints(prs), ctx.max_slide_id, _design_fingerprint(prs)
     parts = {s.slide_id: s.part for s in prs.slides}
+    expected = [s.part for s in prs.slides]
 
     def refuse_save(*_args, **_kwargs):
         raise PptxSkillsError("the script must not save: pptx exec saves the deck when the script has finished")
 
     prs.save = refuse_save  # shadows the method for the script's run only
     try:
-        exec(code, _globals(ctx, script))  # noqa: S102 - running the agent's script is this command's job
+        with contextlib.redirect_stdout(sys.stderr):  # print() must not mix into the command's (JSON) output
+            exec(code, _globals(ctx, script, expected))  # noqa: S102 - running the agent's script is this command's job
     except KeyboardInterrupt:
         raise
     except BaseException as exc:  # SystemExit too: nothing is saved unless the script runs to its end
         raise _failure(script, exc) from exc
     finally:
         del prs.save
+    _check_kept_slides(prs, script, expected)
     _normalise(ctx, parts, floor)
     broken = structure_errors(prs)
     if broken:
         raise PptxSkillsError(f"{script.name} left the deck broken, so nothing was changed: " + "; ".join(broken))
     after = _fingerprints(prs)
     ctx.touched = {slide_id for slide_id, digest in after.items() if before.get(slide_id) != digest}
+    if _design_fingerprint(prs) != design:
+        ctx.touched = set(after)
+        ctx.messages.append(f"{script.name} changed the slide master, a layout or the theme, so every slide counts as touched")
     return finish(ctx, source, slug_label(script.stem, "script"))
 
 
@@ -201,7 +258,7 @@ def register(subparsers) -> None:
     )
     parser.add_argument("deck", help="working copy (.pptx)")
     parser.add_argument("script", help="python-pptx script (.py); globals: prs, deck_dir, brief, cm, pt, theme_color, "
-                        "plain, slide_by_id, layout, add_slide")
+                        "plain, slide_by_id, layout, add_slide, delete_slide, move_slide")
     parser.add_argument(
         "--outside-deck", action="store_true",
         help="also change a .pptx that is not a deck folder's working copy, in place and without snapshot or change log",

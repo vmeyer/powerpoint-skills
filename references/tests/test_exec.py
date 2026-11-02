@@ -161,3 +161,96 @@ def test_cli_exec(work, tmp_path, capsys):
     assert "missing.py" in capsys.readouterr().err
     assert main(["exec", str(work), str(script(tmp_path, "pass\n", "noop.py")), "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["touched"] == []
+
+
+# --- slides deleted or moved by a script (R12) -----------------------------------------------------
+
+RAW_DELETE = """
+    first = prs.slides._sldIdLst[0]
+    prs.part.drop_rel(first.rId)
+    prs.slides._sldIdLst.remove(first)
+"""
+RAW_MOVE = """
+    ids = prs.slides._sldIdLst
+    first = ids[0]
+    ids.remove(first)
+    ids.append(first)
+"""
+
+
+@pytest.fixture
+def sectioned_work(tmp_path, make_deck):
+    init_deck(tmp_path / "decks/sec", sectioned_deck(make_deck), keep_slides=True)
+    return tmp_path / "decks/sec/sec.pptx"
+
+
+@pytest.mark.parametrize("body", [RAW_DELETE, RAW_MOVE, "move_slide(prs.slides[2], 1)\n" + textwrap.dedent(RAW_MOVE)])
+def test_a_script_that_deletes_or_moves_slides_itself_is_refused(sectioned_work, tmp_path, body):
+    state = _state_without_changes(sectioned_work)
+    with pytest.raises(PptxSkillsError, match="nothing was changed") as exc:
+        run_script(sectioned_work, script(tmp_path, body, "raw.py"))
+    assert "delete_slide" in str(exc.value) and "move_slide" in str(exc.value)
+    assert _state_without_changes(sectioned_work) == state
+
+
+def _state_without_changes(deck):
+    return file_hash(deck), (deck.parent / "deck.json").read_text()
+
+
+def test_the_delete_and_move_helpers_keep_sections_links_and_numbers(sectioned_work, tmp_path):
+    before = [s.slide_id for s in open_presentation(sectioned_work).slides]
+    body = """
+        delete_slide(prs.slides[0])
+        move_slide(slide_by_id(%d), 1)
+        added = add_slide("Blank", after=1)
+        delete_slide(added)
+        assert len(prs.slides) == 2
+    """ % before[2]
+    result = run_script(sectioned_work, script(tmp_path, body, "helpers.py"))
+    prs = open_presentation(sectioned_work)
+    assert [s.slide_id for s in prs.slides] == [before[2], before[1]]
+    assert_sections_consistent(prs)
+    assert sorted(result["touched"]) == []  # a move or a delete changes no slide's content
+    names = [str(s.part.partname) for s in prs.slides]
+    assert names == ["/ppt/slides/slide1.xml", "/ppt/slides/slide2.xml"]
+
+
+# --- colors, output and master changes --------------------------------------------------------
+
+def test_theme_color_replaces_the_template_gradients_modifiers(work, tmp_path):
+    body = """
+        from pptx.enum.shapes import MSO_SHAPE
+        slide = add_slide("Blank")
+        band = plain(slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, cm(10), cm(5)))
+        band.name = "band"
+        band.fill.gradient()
+        theme_color(band.fill.gradient_stops[0].color, "accent1")
+        theme_color(band.fill.gradient_stops[1].color, "accent1-50")
+    """
+    run_script(work, script(tmp_path, body, "gradient.py"))
+    band = next(s for s in open_presentation(work).slides[1].shapes if s.name == "band")
+    stops = [gs.find(qn("a:schemeClr")) for gs in band._element.iter(qn("a:gs"))]
+    assert [[etree_name(c) for c in stop] for stop in stops] == [[], ["lumMod"]]
+
+
+def etree_name(element) -> str:
+    return element.tag.split("}")[1]
+
+
+def test_print_in_a_script_goes_to_stderr(work, tmp_path, capsys):
+    path = script(tmp_path, "print('hello from the script')\nadd_slide('Blank')\n", "talks.py")
+    assert main(["exec", str(work), str(path), "--json"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["seq"] == 2 and "hello from the script" in captured.err
+
+
+def test_a_master_or_theme_change_touches_every_slide(work, tmp_path):
+    apply_changeset(work, {"ops": [{"op": "add_slide", "layout": "Blank"}]})
+    ids = [s.slide_id for s in open_presentation(work).slides]
+    body = """
+        prs.slide_master.background.fill.solid()
+        theme_color(prs.slide_master.background.fill, "lt2")
+    """
+    result = run_script(work, script(tmp_path, body, "background.py"))
+    assert sorted(result["touched"]) == sorted(ids)
+    assert any("master" in m for m in result["messages"])

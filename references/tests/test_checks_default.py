@@ -92,3 +92,14 @@ def test_cli_strict_runs_every_rule_and_exits_1_only_on_errors(make_deck, capsys
 
     assert main(["check", str(make_deck(warnings_only, name="w.pptx")), "--strict"]) == 0
     assert "near-aligned" in capsys.readouterr().out
+
+
+def test_the_font_note_names_one_or_two_fonts(tmp_path, monkeypatch):
+    from pptx_skills.deckdir import init_deck
+    from pptx_skills.theme import apply_theme
+
+    monkeypatch.setattr("pptx_skills.checks.style.find_font", lambda family, *a, **k: None)
+    init_deck(tmp_path / "decks/f", None)
+    assert "the theme font Arial is not installed" in run_checks(tmp_path / "decks/f")["notes"][0]
+    apply_theme(tmp_path / "decks/f", {}, {"major": "Georgia", "minor": "Verdana"})
+    assert "the theme fonts Georgia and Verdana are not installed" in run_checks(tmp_path / "decks/f")["notes"][0]

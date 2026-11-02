@@ -61,11 +61,24 @@ def format_color(ref: ColorRef) -> str:
 
 
 def apply_color(color_format: ColorFormat, ref: ColorRef) -> None:
+    """Set the color exactly as `ref` says: tints, shades and saturation the color carried before (e.g. from
+    python-pptx's default gradient) are dropped; only its transparency (`a:alpha`) stays."""
+    color = getattr(color_format._color, "_xClr", None)
+    alpha = []
+    if color is not None:
+        alpha = [child for child in color if child.tag == qn("a:alpha")]
+        for child in list(color):
+            if child.tag != qn("a:alpha"):
+                color.remove(child)
     if ref.rgb is not None:
         color_format.rgb = RGBColor.from_string(ref.rgb)
-        return
-    color_format.theme_color = ROLE_TO_MSO[ref.role]
-    color_format.brightness = ref.brightness / 100
+    else:
+        color_format.theme_color = ROLE_TO_MSO[ref.role]
+        color_format.brightness = ref.brightness / 100
+    new = color_format._color._xClr
+    if new is not color:  # python-pptx replaced the element (theme color <-> RGB): carry the transparency over
+        for child in reversed(alpha):
+            new.insert(0, child)
 
 
 _SYSTEM_COLORS = {"windowText": "#000000", "window": "#FFFFFF"}  # a:sysClr without a cached lastClr

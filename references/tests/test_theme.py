@@ -112,3 +112,28 @@ def test_apply_theme_needs_an_existing_deck(tmp_path):
 
     with pytest.raises(PptxSkillsError, match="does not exist"):
         apply_theme(tmp_path / "missing.pptx", {"accent1": "#000000"}, {})
+
+
+def test_theme_says_that_renders_are_stale(tmp_path, capsys):
+    d = tmp_path / "decks/t"
+    init_deck(d, None)
+    assert main(["theme", str(d), "--color", "accent1=#123456"]) == 0
+    assert "pptx render" in capsys.readouterr().out
+
+
+def test_a_new_typeface_drops_the_old_fonts_metrics():
+    from lxml import etree
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    from pptx.oxml.ns import qn
+
+    from pptx_skills.neutral import neutral_presentation, set_theme
+
+    prs = neutral_presentation()
+    part = prs.slide_master.part.part_related_by(RT.THEME)
+    root = etree.fromstring(part.blob)
+    latin = root.find(".//" + qn("a:majorFont")).find(qn("a:latin"))
+    latin.attrib.update({"panose": "020F0302020204030204", "pitchFamily": "34", "charset": "0"})
+    part._blob = etree.tostring(root)
+    set_theme(prs, {}, {"major": "Georgia"})
+    latin = etree.fromstring(part.blob).find(".//" + qn("a:majorFont")).find(qn("a:latin"))
+    assert dict(latin.attrib) == {"typeface": "Georgia"}

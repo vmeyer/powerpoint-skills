@@ -66,6 +66,9 @@ def apply_theme(deck_path: Path, colors: dict, fonts: dict) -> dict:
     result = finish(ctx, {"label": "theme", "theme": {"colors": resolved, "fonts": fonts}}, "theme")
     if ctx.deck_dir is not None:
         refresh_brief(ctx.deck_dir, load_deck(ctx.deck_dir))
+    result["messages"].append(
+        f"every slide now looks different and earlier renders are stale; re-render with `pptx render {ctx.deck_path} --sheet`"
+    )
     for family in dict.fromkeys(fonts.values()):
         if find_font(family) is None:
             result["messages"].append(

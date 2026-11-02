@@ -97,7 +97,10 @@ def set_theme(prs, colors: dict, fonts: dict, name: str | None = None) -> None:
                 el.remove(child)
             etree.SubElement(el, qn("a:srgbClr")).set("val", value.lstrip("#").upper())
         for key, family in fonts.items():
-            font_scheme.find(f"{qn('a:' + key + 'Font')}/{qn('a:latin')}").set("typeface", family)
+            latin = font_scheme.find(f"{qn('a:' + key + 'Font')}/{qn('a:latin')}")
+            for metric in ("panose", "pitchFamily", "charset"):  # they describe the old typeface
+                latin.attrib.pop(metric, None)
+            latin.set("typeface", family)
         part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
 

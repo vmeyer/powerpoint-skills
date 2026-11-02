@@ -80,3 +80,17 @@ def test_read_valid_colors_without_optional_attributes(inner, expected):
 ])
 def test_read_never_writes_a_zero_brightness(inner, expected):
     assert read_color(_fill(inner)) == expected
+
+
+def test_apply_color_replaces_modifiers_but_keeps_transparency():
+    el = parse_xml(
+        f'<a:solidFill {nsdecls("a")}><a:schemeClr val="accent1"><a:tint val="66000"/><a:satMod val="160000"/>'
+        '<a:alpha val="50000"/></a:schemeClr></a:solidFill>'
+    )
+    from pptx.dml.color import ColorFormat
+
+    apply_color(ColorFormat.from_colorchoice_parent(el), parse_color("accent2+40"))
+    assert read_color(el) == "accent2+40"
+    assert [c.tag.split("}")[1] for c in el.find(qn("a:schemeClr"))] == ["alpha", "lumMod", "lumOff"]
+    apply_color(ColorFormat.from_colorchoice_parent(el), parse_color("#112233"))
+    assert [c.tag.split("}")[1] for c in el.find(qn("a:srgbClr"))] == ["alpha"]

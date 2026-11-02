@@ -204,9 +204,10 @@ def run_checks(deck_path: Path, slides: list[int] | None = None, all_slides: boo
     }
     missing = [] if strict else style.missing_theme_fonts(prs)  # with strict: the finding missing-font
     if missing:
+        fonts = f"font {missing[0]} is" if len(missing) == 1 else f"fonts {' and '.join(missing)} are"
         report["notes"] = [
-            f"the theme font {' and '.join(missing)} is not installed, so text is measured and rendered with a "
-            "fallback font; line breaks may differ in PowerPoint"
+            f"the theme {fonts} not installed, so text is measured and rendered with a fallback font; "
+            "line breaks may differ in PowerPoint"
         ]
     if deck_dir:
         _write_slide_reports(deck_dir, views, report["findings"])
