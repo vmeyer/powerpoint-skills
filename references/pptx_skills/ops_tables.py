@@ -1,10 +1,12 @@
 """Table ops: add a native table or fill one cloned from the examples, keeping its table style."""
 
 import copy
+import re
 
 from pptx.oxml.ns import qn
 from pptx.util import Cm
 
+from .brief import default_table_style, table_style_catalog
 from .changeset import Context, op, resolve_shape
 from .colors import apply_color
 from .errors import PptxSkillsError
@@ -14,17 +16,35 @@ from .slides import resolve_slide
 
 
 def _cell_paragraphs(text: str, font: dict) -> list[dict]:
-    """The `text` shorthand for a cell: `**` adds bold, plain runs inherit the cell's and the table style's weight.
+    """The `text` shorthand for a cell.
 
-    Unlike a text box, a cell must not write `b=0` on plain runs: that would unbold header cells that the
-    table style (or the cloned cell's first run) makes bold.
+    Text without `**` writes no weight, so header cells keep the bold of the table style or the cloned cell.
+    Text with `**` is fully determined by the markers (plain runs get `b=0`); `font.bold: false` unbolds a whole cell.
     """
     paragraphs = _shorthand(text, font)
+    if "**" in text:  # explicit markers: bold is fully determined by them, as in a text box
+        return paragraphs
     for paragraph in paragraphs:
         for run in paragraph["runs"]:
-            if run.get("b") is False:
-                del run["b"]
+            run.pop("b", None)
     return paragraphs
+
+
+_GUID = re.compile(r"^\{[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}$")
+
+
+def _style_id(prs, style: str | None) -> str | None:
+    """The style id for `add_table`: a GUID as given, a name of the deck's tableStyles part, else the deck's default."""
+    if style is None:
+        return default_table_style(prs)
+    if _GUID.match(style):
+        return style
+    catalog = table_style_catalog(prs)
+    for entry in catalog:
+        if (entry["name"] or "").casefold() == style.casefold():
+            return entry["id"]
+    names = ", ".join(f'"{e["name"]}"' for e in catalog) or "none defined"
+    raise PptxSkillsError(f'unknown table style "{style}"; styles of this deck: {names} (or give a style GUID)')
 
 
 def _check_rectangular(rows: list[list[str]]) -> int:
@@ -56,18 +76,19 @@ def _add_table(ctx: Context, spec: dict) -> None:
         if r >= len(rows) or c >= cols:
             raise PptxSkillsError(f'fills "{key}" is outside the {len(rows)}x{cols} table (row,column are 0-based)')
         fills[(r, c)] = _color(color, allow_rgb, f'fills "{key}"')
+    style_id = _style_id(ctx.prs, spec.get("style"))
     box = _snapped(ctx, spec["box"])
     frame = slide.shapes.add_table(len(rows), cols, Cm(box.x), Cm(box.y), Cm(box.w), Cm(box.h))
     frame.name = spec["name"]
     table = frame.table
     table.first_row = spec.get("header", True)
     table.horz_banding = False  # banding is decoration the change set did not ask for
-    if "style_id" in spec:  # without it python-pptx's built-in "Medium Style 2 - Accent 1" applies
-        frame._element.graphic.graphicData.tbl.tblPr.find(qn("a:tableStyleId")).text = spec["style_id"]
+    if style_id:  # otherwise python-pptx's built-in "Medium Style 2 - Accent 1" stays
+        frame._element.graphic.graphicData.tbl.tblPr.find(qn("a:tableStyleId")).text = style_id
     if widths is not None:
         for column, width in zip(table.columns, widths):
             column.width = Cm(width)
-        frame.width = Cm(sum(widths))
+        frame.width = sum(column.width for column in table.columns)
     _fill_cells(table, rows, spec.get("font") or {}, allow_rgb)
     for (r, c), ref in fills.items():
         cell = table.cell(r, c)
@@ -77,6 +98,18 @@ def _add_table(ctx: Context, spec: dict) -> None:
             cell.fill.solid()
             apply_color(cell.fill.fore_color, ref)
     ctx.touched.add(slide.slide_id)
+
+
+def _check_spans(name: str, trs: list, wanted: int) -> None:
+    """Refuse a resize that would copy or cut a vertical merge."""
+    def span(tc) -> int:
+        return int(tc.get("rowSpan", 1))
+
+    if wanted > len(trs) and any(tc.get("vMerge") or span(tc) > 1 for tc in trs[-1].findall(qn("a:tc"))):
+        raise PptxSkillsError(f'the last row of table "{name}" is part of a vertically merged cell; unmerge it in PowerPoint before adding rows')
+    for i, tr in enumerate(trs[:wanted]):
+        if any(i + span(tc) > wanted for tc in tr.findall(qn("a:tc"))):
+            raise PptxSkillsError(f'removing rows would cut a vertically merged cell of table "{name}"; unmerge it in PowerPoint or keep at least {max(i + span(tc) for tc in tr.findall(qn("a:tc")))} rows')
 
 
 @op("set_table")
@@ -92,6 +125,7 @@ def _set_table(ctx: Context, spec: dict) -> None:
         raise PptxSkillsError(f'the rows have {cols} columns but table "{frame.name}" has {len(table.columns)}; set_table does not add or remove columns')
     tbl = frame._element.graphic.graphicData.tbl
     trs = tbl.tr_lst
+    _check_spans(frame.name, trs, len(rows))
     while len(trs) > len(rows):
         tbl.remove(trs.pop())
     while len(trs) < len(rows):

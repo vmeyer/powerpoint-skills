@@ -330,24 +330,27 @@ top-level shapes that are not placeholders can be grouped. Ungroup keeps every c
 ### add_table, set_table
 
 `add_table` adds a native table; `box` is `[x, y, w, h]` in cm (snapped like shapes), `rows` the cell texts, all
-rows with the same number of columns. Cell text uses the `text` shorthand (`\n` = paragraph, `**bold**`);
-plain runs inherit the weight of the table style, so header cells stay bold.
+rows with the same number of columns. Cell text uses the `text` shorthand (`\n` = paragraph, `**bold**`).
+Text without `**` writes no weight, so header cells keep the bold of the table style; text with `**` is
+bold exactly where marked, and `font.bold: false` unbolds a whole cell.
 
 | Field | Meaning |
 |---|---|
 | `header` | first row is the header, default `true` |
 | `col_widths` | column widths in cm, one per column; the table is as wide as their sum (default: equal widths in `box`) |
-| `style_id` | table style GUID, e.g. the one a cloned example table uses (`table_styles` in `style/brief.json`) |
+| `style` | table style by name or GUID; names come from "Table styles" in `style/brief.md` (default: the master's default style) |
 | `font` | `{size, color, bold}` for every cell |
 | `fills` | cell fills `{"row,col": color}`, 0-based, theme colors as elsewhere |
 
-Without `style_id` the table uses PowerPoint's built-in "Medium Style 2 - Accent 1" (accent 1 header, tinted
-body); banded rows are switched off. For the master's own look, clone a table slide from the examples and
-use `set_table`; a custom style exists only in the deck that defines it, so `style_id` is for built-in GUIDs.
+Without `style` the table uses the master's default table style (marked "default" in the brief's table-style
+list), so it looks like the master's own tables; python-pptx's built-in "Medium Style 2 - Accent 1" applies only
+when the deck defines none. Banded rows are switched off. The style sets borders, fills and header weight; to get
+the exact cell formatting of an example table (alignment, sizes), clone its slide and use `set_table`.
 
 `set_table` writes the cell texts of an existing table (`target` as for any shape), usually one cloned from the
 examples. It keeps the table style and the cell formatting, adds rows by copying the last row and removes
-surplus rows. The number of columns must match; it never adds or removes columns.
+surplus rows. The number of columns must match; it never adds or removes columns. It refuses to copy or cut
+a vertically merged cell (unmerge it in PowerPoint first).
 
 ```json
 {"op": "add_table", "slide": "$last", "name": "table-options", "box": [1.69, 4.45, 30.48, 6],

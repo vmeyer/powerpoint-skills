@@ -69,12 +69,12 @@ def test_add_table_options_and_errors(make_deck):
     deck = make_deck(lambda prs: prs.slides.add_slide(layout_named(prs, "Blank")))
     guid = "{2D5ABB26-0587-4C30-8999-92F81FD0307C}"
     apply(deck, [{"op": "add_table", "slide": 1, "name": "tbl", "box": [2, 3, 20, 6], "rows": [["**Bold** plain", "x"]],
-                  "header": False, "style_id": guid, "font": {"size": 12}}])
+                  "header": False, "style": guid, "font": {"size": 12}}])
     frame = frame_named(deck)
     assert not frame.table.first_row
     assert frame._element.graphic.graphicData.tbl.tblPr.find(qn("a:tableStyleId")).text == guid
     runs = frame.table.cell(0, 0).text_frame.paragraphs[0].runs
-    assert [(r.text, r.font.bold, r.font.size.pt) for r in runs] == [("Bold", True, 12), (" plain", None, 12)]
+    assert [(r.text, r.font.bold, r.font.size.pt) for r in runs] == [("Bold", True, 12), (" plain", False, 12)]
     for bad, message in (
         ({"rows": [["a", "b"], ["c"]]}, "columns"),
         ({"rows": [["a", "b"]], "col_widths": [5]}, "col_widths"),
@@ -83,6 +83,83 @@ def test_add_table_options_and_errors(make_deck):
     ):
         with pytest.raises(PptxSkillsError, match=message):
             apply(deck, [{"op": "add_table", "slide": 1, "name": "other", "box": [2, 9, 10, 2], **bad}])
+
+
+CUSTOM = "{11111111-2222-3333-4444-555555555555}"
+OTHER = "{66666666-7777-8888-9999-AAAAAAAAAAAA}"
+
+
+@pytest.fixture
+def styled_deck(make_deck):
+    """A deck whose tableStyles part defines two custom styles and makes the first one the default."""
+    xml = (
+        '<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="%s">'
+        '<a:tblStyle styleId="%s" styleName="Corporate lined"/><a:tblStyle styleId="%s" styleName="Corporate filled"/></a:tblStyleLst>'
+    ) % (CUSTOM, CUSTOM, OTHER)
+
+    def build(prs):
+        prs.slides.add_slide(layout_named(prs, "Blank"))
+        part = next(r.target_part for r in prs.part.rels.values() if r.reltype.endswith("/tableStyles"))
+        part._blob = xml.encode()
+
+    return make_deck(build, name="styled.pptx")
+
+
+def style_of(deck, name="tbl"):
+    return frame_named(deck, name)._element.graphic.graphicData.tbl.tblPr.find(qn("a:tableStyleId")).text
+
+
+def test_table_style_default_name_and_unknown(styled_deck):
+    from pptx_skills.brief import table_style_catalog
+
+    base = {"op": "add_table", "slide": 1, "box": [2, 3, 10, 2], "rows": [["a", "b"]]}
+    apply(styled_deck, [{**base, "name": "tbl"}, {**base, "name": "t2", "box": [2, 7, 10, 2], "style": "corporate FILLED"}])
+    assert style_of(styled_deck) == CUSTOM and style_of(styled_deck, "t2") == OTHER
+    assert table_style_catalog(open_presentation(styled_deck)) == [
+        {"name": "Corporate lined", "id": CUSTOM, "default": True}, {"name": "Corporate filled", "id": OTHER, "default": False}]
+    with pytest.raises(PptxSkillsError, match='unknown table style "nope".*Corporate lined.*Corporate filled'):
+        apply(styled_deck, [{**base, "name": "t3", "style": "nope"}])
+
+
+def test_without_custom_styles_the_builtin_default_stays(make_deck):
+    deck = make_deck(lambda prs: prs.slides.add_slide(layout_named(prs, "Blank")))
+    apply(deck, [{"op": "add_table", "slide": 1, "name": "tbl", "box": [2, 3, 10, 2], "rows": [["a"]]}])
+    assert style_of(deck) == "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"
+
+
+def test_brief_lists_table_styles(styled_deck, tmp_path):
+    from pptx_skills.brief import _markdown, build_brief
+
+    brief = build_brief(open_presentation(styled_deck))
+    assert [e["name"] for e in brief["table_style_catalog"]] == ["Corporate lined", "Corporate filled"]
+    assert f"- Corporate lined {CUSTOM} (default)" in _markdown(brief, "")
+
+
+def test_bold_markers_determine_the_whole_cell(make_deck):
+    deck = make_deck(lambda prs: prs.slides.add_slide(layout_named(prs, "Blank")))
+    apply(deck, [{"op": "add_table", "slide": 1, "name": "tbl", "box": [2, 3, 10, 2], "col_widths": [3.333, 4.4449],
+                  "rows": [["**Bold** plain", "x"]], "font": {"bold": False}}])
+    frame = frame_named(deck)
+    assert frame.width == sum(c.width for c in frame.table.columns)
+    runs = frame.table.cell(0, 0).text_frame.paragraphs[0].runs
+    assert [r.font.bold for r in runs] == [True, False]
+    apply(deck, [{"op": "set_table", "slide": 1, "target": {"name": "tbl"}, "rows": [["**Bold** plain", "x"]]}])
+    assert [r.font.bold for r in frame_named(deck).table.cell(0, 0).text_frame.paragraphs[0].runs] == [True, False]
+
+
+def test_set_table_refuses_to_copy_or_cut_vertical_merges(make_deck):
+    def build(prs):
+        slide = prs.slides.add_slide(layout_named(prs, "Blank"))
+        slide.shapes.add_table(3, 2, Cm(2), Cm(2), Cm(10), Cm(3)).name = "tbl"
+        slide.shapes[0].table.cell(1, 0).merge(slide.shapes[0].table.cell(2, 0))
+
+    deck = make_deck(build)
+    with pytest.raises(PptxSkillsError, match="vertically merged.*adding rows"):
+        apply(deck, [{"op": "set_table", "slide": 1, "target": {"name": "tbl"}, "rows": [["a", "b"]] * 4}])
+    with pytest.raises(PptxSkillsError, match="cut a vertically merged cell"):
+        apply(deck, [{"op": "set_table", "slide": 1, "target": {"name": "tbl"}, "rows": [["a", "b"]] * 2}])
+    apply(deck, [{"op": "set_table", "slide": 1, "target": {"name": "tbl"}, "rows": [["a", "b"], ["c", "d"], ["", "e"]]}])
+    assert table_item(deck)["table"][1][0] == "c"
 
 
 def test_set_table_grows_and_shrinks(cloned_table):

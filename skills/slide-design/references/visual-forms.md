@@ -295,7 +295,8 @@ to carry an argument by itself; give it an action title and emphasize the rows t
 
 Structure: the full content width, or two of three columns with the takeaway in the third (as for
 a chart). A header row, few columns, short cell texts. If the brief's building blocks list a
-table, clone it and fill it with `set_table` instead; it keeps the master's table style.
+table, clone it and fill it with `set_table` instead; it keeps the exact cell formatting. A table added with
+`add_table` already uses the master's default table style; pick another by name from the brief.
 For a few values, a comparison or a matrix of text cells reads better.
 
 ```bash

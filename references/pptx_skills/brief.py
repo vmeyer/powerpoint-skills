@@ -96,6 +96,28 @@ def _layout_title_box(layout) -> Box | None:
     return None
 
 
+def table_style_catalog(prs) -> list[dict]:
+    """The table styles defined in the deck's tableStyles part: `[{name, id, default}]` (default = `a:tblStyleLst/@def`)."""
+    from lxml import etree
+
+    for rel in prs.part.rels.values():
+        if rel.reltype.endswith("/tableStyles"):
+            root = etree.fromstring(rel.target_part.blob)
+            default = root.get("def")
+            return [{"name": st.get("styleName"), "id": st.get("styleId"), "default": st.get("styleId") == default} for st in root.findall(qn("a:tblStyle"))]
+    return []
+
+
+def default_table_style(prs) -> str | None:
+    """The deck's default table style id (`a:tblStyleLst/@def`), None without a tableStyles part."""
+    from lxml import etree
+
+    for rel in prs.part.rels.values():
+        if rel.reltype.endswith("/tableStyles"):
+            return etree.fromstring(rel.target_part.blob).get("def")
+    return None
+
+
 def _layouts(prs) -> list[dict]:
     result = []
     for layout in prs.slide_layouts:
@@ -252,6 +274,7 @@ def build_brief(master, examples=None, rules_override: dict | None = None) -> di
         "content_area": area,
         "content_area_source": source,
         "layouts": layouts,
+        "table_style_catalog": table_style_catalog(master),
         **usage,
         "rules": {**DEFAULT_RULES, **(rules_override or {})},
     }
@@ -297,6 +320,9 @@ def _markdown(brief: dict, block: str) -> str:
     for layout in brief["layouts"]:
         roles = ", ".join(p["role"] for p in layout["placeholders"] if p["role"] not in _IGNORED_ROLES) or "no placeholders"
         lines.append(f"- {layout['name']}: {roles}")
+    styles = brief.get("table_style_catalog") or []
+    lines += ["", "## Table styles (`add_table` `style`: name or id)"]
+    lines += [f"- {st['name']} {st['id']}" + (" (default)" if st["default"] else "") for st in styles] or ["- none defined; add_table uses PowerPoint's built-in Medium Style 2 - Accent 1"]
     lines += ["", "## Color usage in the examples"]
     for kind in ("fills", "text"):
         usage = brief["color_usage"][kind]
