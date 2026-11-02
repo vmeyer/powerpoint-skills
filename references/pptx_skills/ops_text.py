@@ -14,15 +14,15 @@ from .slides import resolve_slide
 
 _BULLET_TAGS = ("buClrTx", "buClr", "buSzTx", "buSzPct", "buSzPts", "buFontTx", "buFont", "buNone", "buAutoNum", "buChar", "buBlip")
 _AFTER_BULLET = ("tabLst", "defRPr", "extLst")
-_BULLET_INDENT = 285750  # EMU, a hanging indent of about 0.8 cm
 
 
-def _shorthand(text: str) -> list[dict]:
-    """`\\n` separates paragraphs; text between `**` pairs is bold."""
+def _shorthand(text: str, font: dict) -> list[dict]:
+    """`\\n` separates paragraphs; bold is fully set by the `**` pairs (unless `font.bold` is given)."""
+    plain = {} if "bold" in font else {"b": False}
     paragraphs = []
     for line in text.split("\n"):
         runs = [
-            {"t": part, "b": True} if i % 2 else {"t": part}
+            {"t": part, "b": True} if i % 2 else {"t": part, **plain}
             for i, part in enumerate(line.split("**"))
             if part
         ]
@@ -30,20 +30,38 @@ def _shorthand(text: str) -> list[dict]:
     return paragraphs
 
 
-def _set_bullet(p_el, bullet: bool) -> None:
-    ppr = p_el.get_or_add_pPr()
+def _drop_bullets(ppr) -> None:
     for tag in _BULLET_TAGS:
         for el in ppr.findall(qn(f"a:{tag}")):
             ppr.remove(el)
-    new = etree.SubElement(ppr, qn("a:buChar" if bullet else "a:buNone"))
-    if bullet:
-        new.set("char", "•")
-        if ppr.get("marL") is None:
-            ppr.set("marL", str(_BULLET_INDENT))
-            ppr.set("indent", str(-_BULLET_INDENT))
-    anchor = next((c for c in ppr if c.tag in {qn(f"a:{t}") for t in _AFTER_BULLET}), None)
-    if anchor is not None:
-        anchor.addprevious(new)
+
+
+def _style_paragraph(p_el, spec: dict) -> None:
+    """Apply level and bullet on top of the template pPr; stale margins never survive a change."""
+    level, bullet = spec.get("level"), spec.get("bullet")
+    if level is None and bullet is None:
+        return  # the template's level, bullet and margins carry over as they are
+    ppr = p_el.get_or_add_pPr()
+    if level is not None:
+        ppr.set("lvl", str(level))
+        ppr.attrib.pop("marL", None)
+        ppr.attrib.pop("indent", None)
+    if bullet is False:
+        _drop_bullets(ppr)
+        ppr.set("marL", "0")
+        ppr.set("indent", "0")
+        none = etree.SubElement(ppr, qn("a:buNone"))
+        anchor = next((c for c in ppr if c.tag in {qn(f"a:{t}") for t in _AFTER_BULLET}), None)
+        if anchor is not None:
+            anchor.addprevious(none)
+    elif bullet:
+        has_bullet = any(ppr.find(qn(f"a:{t}")) is not None for t in ("buChar", "buAutoNum", "buBlip"))
+        if not has_bullet:
+            # let the layout or master supply the bullet and its margins
+            for el in ppr.findall(qn("a:buNone")):
+                ppr.remove(el)
+            ppr.attrib.pop("marL", None)
+            ppr.attrib.pop("indent", None)
 
 
 def _format(run, spec: dict, font: dict) -> None:
@@ -96,10 +114,7 @@ def write_paragraphs(text_frame, paragraphs: list[dict], font: dict | None = Non
     for spec in paragraphs or [{"runs": []}]:
         p_el = copy.deepcopy(blank)
         body.append(p_el)
-        if spec.get("level") is not None:
-            p_el.get_or_add_pPr().set("lvl", str(spec["level"]))
-        if "bullet" in spec:
-            _set_bullet(p_el, bool(spec["bullet"]))
+        _style_paragraph(p_el, spec)
         para = text_frame.paragraphs[-1]
         for run_spec in spec.get("runs", []):
             if _is_break(run_spec):
@@ -121,6 +136,6 @@ def _set_text(ctx: Context, spec: dict) -> None:
     shape = resolve_shape(slide, spec["target"])
     if not shape.has_text_frame:
         raise PptxSkillsError(f'shape {shape.shape_id} "{shape.name}" has no text frame')
-    paragraphs = _shorthand(spec["text"]) if "text" in spec else spec["paragraphs"]
+    paragraphs = _shorthand(spec["text"], spec.get("font") or {}) if "text" in spec else spec["paragraphs"]
     write_paragraphs(shape.text_frame, paragraphs, spec.get("font"))
     ctx.touched.add(slide.slide_id)

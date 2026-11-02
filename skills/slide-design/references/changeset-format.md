@@ -96,6 +96,12 @@ first run's properties and the first paragraph's properties of the existing text
 written. Colors are theme roles (`accent1`, `accent2+40`); raw `#RRGGBB` is rejected.
 
 Shorthand: `\n` separates paragraphs, `**…**` marks bold runs.
+In the shorthand, bold is set by the markers alone: text outside `**…**` is written non-bold even when the existing run was bold.
+
+Paragraph properties: a paragraph that sets neither `level` nor `bullet` keeps the first existing paragraph's full
+properties (level, bullet, margins, alignment). `level` replaces the level and drops the template's margins so the
+layout's indent for that level applies. `bullet: true` keeps an existing bullet (character, color, size) and otherwise
+lets the layout or master supply it; `bullet: false` removes the bullet and the hanging indent.
 
 ```json
 {"op": "set_text", "slide": 1, "target": {"role": "title"}, "text": "**Bold** lead\nSecond paragraph"}

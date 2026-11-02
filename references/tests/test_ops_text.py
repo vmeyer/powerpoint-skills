@@ -63,7 +63,7 @@ def test_paragraph_runs_with_color_level_bullet_and_break(title_deck):
             {"br": True}, {"t": "next", "color": "accent2+40"}]},
         {"bullet": False, "runs": [{"t": "plain"}]}]}])
     p0, p1 = slide1(title_deck).shapes.title.text_frame.paragraphs
-    assert p0._p.pPr.get("lvl") == "1" and p0._p.pPr.find(qn("a:buChar")) is not None
+    assert p0._p.pPr.get("lvl") == "1" and p0._p.pPr.find(qn("a:buNone")) is None
     kids = [c for c in p0._p if c.tag in (qn("a:r"), qn("a:br"))]
     assert [c.tag.split("}")[1] for c in kids] == ["r", "r", "br", "r"]
     r0, r1, _, r3 = kids
@@ -139,3 +139,74 @@ def test_resolve_shape_by_role_name_id_and_groups(make_deck):
         resolve_shape(slide, {"name": "ghost"})
     with pytest.raises(PptxSkillsError, match="exactly one of"):
         resolve_shape(slide, {"role": "title", "id": 1})
+
+
+@pytest.fixture
+def hand_formatted_deck(make_deck):
+    """First paragraph: bold run, explicit hanging indent and a custom bullet; second: a buNone heading line."""
+    from lxml import etree
+    from pptx.oxml.ns import nsdecls
+
+    def build(prs):
+        slide = prs.slides.add_slide(layout_named(prs, "Blank"))
+        box = slide.shapes.add_textbox(Cm(2), Cm(2), Cm(8), Cm(4))
+        box.name = "box"
+        body = box.text_frame._txBody
+        for p in body.findall(qn("a:p")):
+            body.remove(p)
+        for xml in (
+            '<a:p %s><a:pPr marL="342900" indent="-342900" algn="r"><a:buClr><a:schemeClr val="accent2"/></a:buClr>'
+            '<a:buChar char="-"/></a:pPr><a:r><a:rPr lang="en-US" b="1"/><a:t>Old</a:t></a:r></a:p>',
+            '<a:p %s><a:pPr marL="0" indent="0"><a:buNone/></a:pPr><a:r><a:rPr lang="en-US"/><a:t>Head</a:t></a:r></a:p>',
+        ):
+            body.append(etree.fromstring(xml % nsdecls("a")))
+
+    return make_deck(build, name="hand.pptx")
+
+
+def _ppr_after(deck, paragraphs):
+    apply(deck, [{"op": "set_text", "slide": 1, "target": {"name": "box"}, "paragraphs": paragraphs}])
+    shape = resolve_shape(slide1(deck), {"name": "box"})
+    return [p._p.pPr for p in shape.text_frame.paragraphs]
+
+
+def test_neither_level_nor_bullet_keeps_template_ppr(hand_formatted_deck):
+    ppr = _ppr_after(hand_formatted_deck, [{"runs": [{"t": "a"}]}, {"runs": [{"t": "b"}]}])[1]
+    assert ppr.get("marL") == "342900" and ppr.find(qn("a:buChar")).get("char") == "-"
+
+
+def test_level_drops_stale_margins(hand_formatted_deck):
+    ppr = _ppr_after(hand_formatted_deck, [{"level": 1, "runs": [{"t": "a"}]}])[0]
+    assert ppr.get("lvl") == "1" and ppr.get("marL") is None and ppr.get("indent") is None
+    assert ppr.get("algn") == "r"
+
+
+def test_bullet_true_keeps_custom_bullet(hand_formatted_deck):
+    ppr = _ppr_after(hand_formatted_deck, [{"bullet": True, "runs": [{"t": "a"}]}])[0]
+    assert ppr.find(qn("a:buChar")).get("char") == "-" and ppr.find(qn("a:buClr")) is not None
+    assert ppr.get("marL") == "342900"
+
+
+def test_bullet_true_after_bu_none_template_lets_layout_decide(hand_formatted_deck):
+    from pptx_skills.ops_text import write_paragraphs
+
+    prs = open_presentation(hand_formatted_deck)
+    box = resolve_shape(prs.slides[0], {"name": "box"})
+    body = box.text_frame._txBody
+    body.remove(body.findall(qn("a:p"))[0])  # the heading line becomes the template
+    write_paragraphs(box.text_frame, [{"bullet": True, "runs": [{"t": "a"}]}])
+    ppr = box.text_frame.paragraphs[0]._p.pPr
+    assert ppr.find(qn("a:buNone")) is None and ppr.get("marL") is None and ppr.find(qn("a:buChar")) is None
+
+
+def test_bullet_false_removes_bullet_and_indent(hand_formatted_deck):
+    ppr = _ppr_after(hand_formatted_deck, [{"bullet": False, "runs": [{"t": "a"}]}])[0]
+    assert ppr.find(qn("a:buNone")) is not None and ppr.find(qn("a:buChar")) is None and ppr.find(qn("a:buClr")) is None
+    assert ppr.get("marL") == "0" and ppr.get("indent") == "0"
+    assert [c.tag.split("}")[1] for c in ppr] == ["buNone"]
+
+
+def test_shorthand_bold_is_set_by_markers_only(hand_formatted_deck):
+    apply(hand_formatted_deck, [{"op": "set_text", "slide": 1, "target": {"name": "box"}, "text": "**Label** rest"}])
+    runs = resolve_shape(slide1(hand_formatted_deck), {"name": "box"}).text_frame.paragraphs[0].runs
+    assert [r.text for r in runs] == ["Label", " rest"] and runs[0].font.bold is True and runs[1].font.bold is False
