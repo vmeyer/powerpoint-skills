@@ -58,7 +58,7 @@ def test_clone_with_picture_and_chart(examples_deck, deck_dir):
     assert workbook is not None and workbook.blob == src_chart.part.chart_workbook.xlsx_part.blob
     picture = _of_type(s, MSO_SHAPE_TYPE.PICTURE)[0]
     assert picture.image.blob == png_bytes()
-    assert run_checks(deck, all_slides=True)["summary"]["error"] == 0
+    assert run_checks(deck, all_slides=True, strict=True)["summary"]["error"] == 0
 
 
 def test_clone_twice_shares_the_picture_but_not_the_chart(examples_deck, deck_dir):
@@ -277,7 +277,7 @@ def test_links_and_tags_across_decks(make_deck, deck_dir_from_default):
     assert slide._element.find(".//" + qn("p:custDataLst")) is None
     assert RT.TAGS not in {r.reltype for r in slide.part.rels.values()}
     assert any("tags" in m for m in res["messages"]) and any("link to another slide" in m for m in res["messages"])
-    report = run_checks(deck, all_slides=True)
+    report = run_checks(deck, all_slides=True, strict=True)
     assert not [f for f in report["findings"] if f["category"] == "structure"]
 
 
@@ -303,7 +303,7 @@ def test_svg_pictures_are_copied(make_deck, deck_dir_from_default):
         part = slide.part.related_part(rid)
         assert part.content_type == "image/svg+xml" and part.blob == svg
     assert len(_parts(prs, "/ppt/media/")) == 2  # one PNG, one SVG, shared by both clones
-    assert run_checks(deck, all_slides=True)["summary"]["error"] == 0
+    assert run_checks(deck, all_slides=True, strict=True)["summary"]["error"] == 0
 
 
 def test_prefixes_named_in_attributes_stay_declared(make_deck, deck_dir_from_default, tmp_path):
@@ -334,7 +334,7 @@ def test_prefixes_named_in_attributes_stay_declared(make_deck, deck_dir_from_def
 # --- cloned example texts (R3) ----------------------------------------------------------------
 
 def _leftovers(deck):
-    return {f["shape_id"] for f in run_checks(deck, all_slides=True)["findings"] if f["rule"] == "leftover-text"}
+    return {f["shape_id"] for f in run_checks(deck, all_slides=True, strict=True)["findings"] if f["rule"] == "leftover-text"}
 
 
 def test_cloned_example_texts_are_recorded_and_flagged(deck_dir):

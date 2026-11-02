@@ -29,7 +29,7 @@ def _path(var):
 
 @needs(REFERENCE)
 def test_reference_slide_passes():
-    rep = run_checks(_path(REFERENCE), all_slides=True)
+    rep = run_checks(_path(REFERENCE), all_slides=True, strict=True)
     assert rep["summary"]["error"] == 0, [f for f in rep["findings"] if f["severity"] == "error"]
     assert not [f for f in rep["findings"] if f["category"] == "text" and f["severity"] == "warning"]
 
@@ -69,7 +69,7 @@ def test_clone_every_example(tmp_path):
     assert cloned > 0, f"cloned {cloned} of {total} example slides, refused {len(refused)}: {refused}"
     assert all("cannot be cloned" in message for _, message in refused), refused
     assert len(open_presentation(working).slides) == cloned
-    report = run_checks(working, all_slides=True)
+    report = run_checks(working, all_slides=True, strict=True)
     assert [f for f in report["findings"] if f["category"] == "structure"] == []
 
 
@@ -108,7 +108,7 @@ def test_cli_workflow_end_to_end(tmp_path, capsys):
     working = deck_dir / "wf.pptx"
     assert cli.main(["apply", str(working), str(changes)]) == 0
     capsys.readouterr()
-    report = run_checks(deck_dir, all_slides=True)
+    report = run_checks(deck_dir, all_slides=True, strict=True)
     assert report["summary"]["error"] == 0, [f for f in report["findings"] if f["severity"] == "error"]
     assert not [f for f in report["findings"] if f["category"] == "text" and f["severity"] == "warning"], [f for f in report["findings"] if f["category"] == "text"]
     assert cli.main(["check", str(deck_dir)]) == 0

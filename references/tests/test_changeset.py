@@ -287,7 +287,7 @@ def test_add_slide_copies_date_footer_and_number(make_deck):
     assert _fields(placed[PP_PLACEHOLDER.DATE]) == _fields(layout[PP_PLACEHOLDER.DATE]) != []
     assert len({s.shape_id for s in slide.shapes}) == len(slide.shapes)
 
-    report = run_checks(deck, all_slides=True)
+    report = run_checks(deck, all_slides=True, strict=True)
     assert not [f for f in report["findings"] if f["rule"] == "empty-placeholder"]
     assert report["summary"]["error"] == 0
 

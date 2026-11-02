@@ -59,10 +59,15 @@ def foreign_font(ctx, slide):
     ]
 
 
+def missing_theme_fonts(prs) -> list[str]:
+    """The theme fonts of the deck that are not installed on this machine."""
+    names = [f for f in dict.fromkeys(_theme_fonts(prs.slide_master)) if f and not f.startswith("+")]
+    return [f for f in names if find_font(f) is None]
+
+
 @rule("missing-font", "style", "warning", scope="deck")
 def missing_font(ctx, _):
-    names = [f for f in dict.fromkeys(_theme_fonts(ctx.prs.slide_master)) if f and not f.startswith("+")]
-    missing = [f for f in names if find_font(f) is None]
+    missing = missing_theme_fonts(ctx.prs)
     if not missing:
         return []
     return [ctx.finding(None, None, f"the theme font {', '.join(missing)} is not installed, so measured text sizes are approximations", "install the font (the layout checks and renders then match PowerPoint) or accept the approximate results")]

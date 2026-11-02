@@ -180,7 +180,7 @@ def test_notes_page_without_body_placeholder(no_notes_body, capsys):
     from pptx_skills.cli import main
 
     assert inventory(open_presentation(no_notes_body))["slides"][0]["notes"] == ""
-    assert run_checks(no_notes_body)["summary"]["error"] == 0
+    assert run_checks(no_notes_body, strict=True)["summary"]["error"] == 0
     with pytest.raises(PptxSkillsError, match="op 1 .set_notes.: .*no body placeholder"):
         apply(no_notes_body, [{"op": "set_notes", "slide": 1, "text": "Say this"}])
     assert main(["inventory", str(no_notes_body)]) == 0

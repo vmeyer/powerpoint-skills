@@ -4,7 +4,12 @@ from pptx.enum.dml import MSO_THEME_COLOR
 from pptx.util import Cm
 
 from conftest import finding, layout_named
-from pptx_skills.checks import run_checks
+from pptx_skills.checks import run_checks as _run_checks
+
+
+def run_checks(*args, **kwargs):
+    """These tests exercise every rule, so they run the strict selection."""
+    return _run_checks(*args, strict=True, **kwargs)
 
 
 def build(make_deck, fill):

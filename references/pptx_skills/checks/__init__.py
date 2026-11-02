@@ -1,7 +1,8 @@
 """`pptx check`: deterministic rules an agent runs after every change, before it shows a slide.
 
 Rules register with `@rule(rule_id, category, severity)` and take `(ctx, slide)`; the modules
-`structure`, `text`, `geometry` and `style` are imported at the bottom of this file.
+`structure`, `text`, `geometry` and `style` are imported at the bottom of this file. By default only
+DEFAULT_RULE_IDS run; `strict` runs every rule.
 """
 
 import json
@@ -21,6 +22,12 @@ from ..opc import open_presentation
 
 CATEGORIES = ("structure", "text", "geometry", "style")
 SEVERITIES = ("error", "warning", "info")
+# What every check runs: errors that break a slide or the file, plus two writing rules the user insists on
+# (no keyword chains, no walls of text). Matters of taste (alignment, sizes, colors, fonts) run with `strict`.
+DEFAULT_RULE_IDS = frozenset({
+    "reopen", "relationships", "duplicate-ids", "overflow", "off-slide", "leftover-text",
+    "keyword-chain", "too-many-lines",
+})
 
 
 @dataclass
@@ -148,8 +155,9 @@ def _resolve(deck_path: Path) -> tuple[Path, Path | None]:
 
 
 def _selected(prs, deck: dict, slides, all_slides: bool) -> list[int]:
+    """The slide numbers to check: `slides` as given ([] = none, deck rules only), else the last touched or all."""
     count = len(prs.slides)
-    if slides:
+    if slides is not None:
         bad = [n for n in slides if not 1 <= n <= count]
         if bad:
             raise PptxSkillsError(f"slide {bad[0]} does not exist; the deck has {count} slides")
@@ -162,7 +170,11 @@ def _selected(prs, deck: dict, slides, all_slides: bool) -> list[int]:
     return list(range(1, count + 1))
 
 
-def run_checks(deck_path: Path, slides: list[int] | None = None, all_slides: bool = False) -> dict:
+def run_checks(deck_path: Path, slides: list[int] | None = None, all_slides: bool = False, strict: bool = False) -> dict:
+    """Check the slides (see `_selected`) with DEFAULT_RULE_IDS, or with every rule when `strict`.
+
+    Without `strict` a theme font that is not installed is a note in `report["notes"]`, not a finding.
+    """
     path, deck_dir = _resolve(deck_path)
     prs = open_presentation(path)
     deck = load_deck(deck_dir) if deck_dir else {}
@@ -175,6 +187,8 @@ def run_checks(deck_path: Path, slides: list[int] | None = None, all_slides: boo
 
     findings: list[Finding] = []
     for item in RULES:
+        if not strict and item.rule_id not in DEFAULT_RULE_IDS:
+            continue
         ctx._current = item
         if item.scope == "deck":
             findings.extend(item.func(ctx, None))
@@ -188,6 +202,12 @@ def run_checks(deck_path: Path, slides: list[int] | None = None, all_slides: boo
         "findings": [asdict(f) for f in sorted(findings, key=lambda f: (f.slide or 0, SEVERITIES.index(f.severity)))],
         "summary": summary,
     }
+    missing = [] if strict else style.missing_theme_fonts(prs)  # with strict: the finding missing-font
+    if missing:
+        report["notes"] = [
+            f"the theme font {' and '.join(missing)} is not installed, so text is measured and rendered with a "
+            "fallback font; line breaks may differ in PowerPoint"
+        ]
     if deck_dir:
         _write_slide_reports(deck_dir, views, report["findings"])
     return report
@@ -208,8 +228,9 @@ def format_report(report: dict) -> str:
         if f["shape"]:
             where += f" [{f['shape']}]"
         lines.append(f"{where} {f['severity']} {f['rule']}: {f['message']} — {f['fix']}")
+    lines += [f"note: {note}" for note in report.get("notes", [])]
     s = report["summary"]
-    shown = ",".join(str(n) for n in report["slides"])
+    shown = ",".join(str(n) for n in report["slides"]) or "none"
     lines.append(f"Checked slides {shown}: {s['error']} errors, {s['warning']} warnings, {s['info']} info.")
     return "\n".join(lines)
 
@@ -221,18 +242,22 @@ def _handle(args) -> int:
             slides = [int(n) for n in args.slides.split(",")]
         except ValueError:
             raise PptxSkillsError(f"--slides expects numbers like 1,3, got {args.slides!r}") from None
-    report = run_checks(Path(args.deck), slides, args.all)
+    report = run_checks(Path(args.deck), slides, args.all, args.strict)
     cli.emit(args, report, format_report(report))
-    s = report["summary"]
-    return cli.FINDINGS if s["error"] or (args.strict and s["warning"]) else cli.OK
+    return cli.FINDINGS if report["summary"]["error"] else cli.OK
 
 
 def register(subparsers) -> None:
-    parser = subparsers.add_parser("check", help="Run the deterministic slide checks.")
+    parser = subparsers.add_parser(
+        "check", help="Run the slide checks: real errors plus keyword chains and long paragraphs; exit 1 on errors."
+    )
     parser.add_argument("deck", help="deck folder or .pptx file")
     parser.add_argument("--slides", help="comma-separated slide numbers (default: slides touched last, else all)")
     parser.add_argument("--all", action="store_true", help="check every slide")
-    parser.add_argument("--strict", action="store_true", help="exit 1 on warnings too")
+    parser.add_argument(
+        "--strict", action="store_true",
+        help="run every rule: also sizes, alignment, gaps, overlaps, colors, fonts, alt text, bullets, titles",
+    )
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.set_defaults(handler=_handle)
 

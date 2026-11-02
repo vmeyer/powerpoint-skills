@@ -105,7 +105,7 @@ def ids(deck) -> dict[str, int]:
 def assert_no_dangling(deck):
     live = set(ids(deck).values())
     assert {spid for spid, _ in targets(deck)} | set(builds(deck)) <= live
-    report = run_checks(deck, all_slides=True)
+    report = run_checks(deck, all_slides=True, strict=True)
     assert [f for f in report["findings"] if f["category"] == "structure"] == []
 
 
