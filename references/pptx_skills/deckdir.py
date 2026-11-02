@@ -46,6 +46,8 @@ def _validate(deck_dir: Path, deck, path: Path) -> None:
         raise PptxSkillsError(f"{path} has an invalid working_copy; it must be a file name inside the deck folder")
     if not isinstance(deck.get("sources"), dict):
         raise PptxSkillsError(f"{path} has invalid sources; expected an object")
+    if not isinstance(deck.get("cloned_texts", {}), dict):
+        raise PptxSkillsError(f"{path} has invalid cloned_texts; expected an object")
 
 
 def _save_deck(deck_dir: Path, deck: dict) -> None:
@@ -170,7 +172,16 @@ def init_deck(
     return deck
 
 
-def record_apply(deck_dir: Path, changeset: dict, label: str, before: bytes, touched: list[int], new_hash: str) -> int:
+def record_apply(
+    deck_dir: Path,
+    changeset: dict,
+    label: str,
+    before: bytes,
+    touched: list[int],
+    new_hash: str,
+    cloned_texts: dict | None = None,
+) -> int:
+    """Log the change set, keep the snapshot and update deck.json; `cloned_texts` replaces the stored record."""
     deck_dir = Path(deck_dir)
     deck = load_deck(deck_dir)
     number = deck["seq"] + 1
@@ -187,6 +198,10 @@ def record_apply(deck_dir: Path, changeset: dict, label: str, before: bytes, tou
         last_touched=list(touched),
         last_applied=datetime.now(timezone.utc).isoformat(timespec="seconds"),
     )
+    if cloned_texts is not None:
+        deck.pop("cloned_texts", None)
+        if cloned_texts:
+            deck["cloned_texts"] = cloned_texts
     _save_deck(deck_dir, deck)
     return number
 

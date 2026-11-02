@@ -47,5 +47,5 @@ def duplicate_ids(ctx, slide):
             out.append(ctx.finding(slide, None, f"shape id {shape_id} is used {count} times on this slide", "remove the duplicate shapes and add them again with change sets"))
     sld_ids = Counter(el.get("id") for el in ctx.prs.part._element.iter(qn("p:sldId")))
     if sld_ids[str(slide.id)] > 1:
-        out.append(ctx.finding(slide, None, f"slide id {slide.id} is used by several slides", "delete the duplicate slide and duplicate it again with `pptx slide duplicate`"))
+        out.append(ctx.finding(slide, None, f"slide id {slide.id} is used by several slides", 'delete the duplicate slide and duplicate it again with a clone_slide op from "self"'))
     return out

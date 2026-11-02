@@ -6,6 +6,7 @@ from pptx.oxml.ns import qn
 
 from ..fonts import _Inheritance, _layout_placeholder, effective_run_style, measure_paragraphs
 from ..geometry import absolute_box
+from ..inventory import plain_text
 from ..units import EMU_PER_CM
 from . import rule
 
@@ -82,7 +83,7 @@ def leftover_text(ctx, slide):
             why = "it is still the layout's prompt text"
         elif (match := _LEFTOVER.search(text)):
             why = f"it contains {match.group(0)!r}"
-        elif str(item["id"]) in cloned and _norm(cloned[str(item["id"])]) == _norm(text):
+        elif str(item["id"]) in cloned and _norm(cloned[str(item["id"])]) == _norm(plain_text(item["text"])):
             why = "it is still the text of the cloned example slide"
         if why:
             out.append(ctx.finding(slide, item, f"template text is left over: {why}", "replace the template text with the real content"))

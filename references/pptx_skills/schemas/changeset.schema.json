@@ -44,6 +44,28 @@
             }
           },
           {
+            "title": "clone_slide",
+            "type": "object",
+            "required": ["op", "from"],
+            "additionalProperties": false,
+            "properties": {
+              "op": {"const": "clone_slide"},
+              "from": {"$ref": "#/$defs/source_slide"},
+              "after": {"$ref": "#/$defs/slide_ref"}
+            }
+          },
+          {
+            "title": "replace_slide",
+            "type": "object",
+            "required": ["op", "slide", "from"],
+            "additionalProperties": false,
+            "properties": {
+              "op": {"const": "replace_slide"},
+              "slide": {"$ref": "#/$defs/slide_ref"},
+              "from": {"$ref": "#/$defs/source_slide"}
+            }
+          },
+          {
             "title": "set_text",
             "type": "object",
             "required": ["op", "slide", "target"],
@@ -237,6 +259,15 @@
       "required": ["preset", "fg", "bg"],
       "additionalProperties": false,
       "properties": {"preset": {"type": "string"}, "fg": {"type": "string"}, "bg": {"type": "string"}}
+    },
+    "source_slide": {
+      "type": "object",
+      "required": ["deck", "slide"],
+      "additionalProperties": false,
+      "properties": {
+        "deck": {"type": "string", "minLength": 1},
+        "slide": {"$ref": "#/$defs/slide_ref"}
+      }
     },
     "slide_ref": {
       "oneOf": [

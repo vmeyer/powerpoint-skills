@@ -1,12 +1,11 @@
 import json
 
 import pytest
-from lxml import etree
 from pptx.enum.shapes import PP_PLACEHOLDER
 from pptx.oxml.ns import qn
 from pptx.util import Cm
 
-from conftest import layout_named
+from conftest import assert_sections_consistent, layout_named, sectioned_deck, sections
 from pptx_skills.changeset import apply_changeset
 from pptx_skills.checks import run_checks
 from pptx_skills.cli import main
@@ -14,8 +13,6 @@ from pptx_skills.deckdir import load_deck
 from pptx_skills.errors import PptxSkillsError
 from pptx_skills.opc import file_hash, open_presentation
 from pptx_skills import slides
-
-P14 = "http://schemas.microsoft.com/office/powerpoint/2010/main"
 
 
 def test_add_and_move_slides(deck_dir_from_default):
@@ -119,59 +116,31 @@ def test_cli_apply(deck_dir_from_default, tmp_path, capsys):
 
 # --- sections (R12) ---------------------------------------------------------------------------
 
-def _sectioned(make_deck):
-    """Three slides in sections A [s1, s2] and B [s3]."""
-    def build(prs):
-        for _ in range(3):
-            prs.slides.add_slide(layout_named(prs, "Blank"))
-        ids = [s.id for s in prs.slides._sldIdLst]
-        sections = "".join(
-            f'<p14:section name="{n}" id="{{0000000{i}-0000-0000-0000-000000000000}}"><p14:sldIdLst>'
-            + "".join(f'<p14:sldId id="{x}"/>' for x in members) + "</p14:sldIdLst></p14:section>"
-            for i, (n, members) in enumerate((("A", ids[:2]), ("B", ids[2:])), 1)
-        )
-        ext = etree.fromstring(
-            '<p:extLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}">'
-            f'<p14:sectionLst xmlns:p14="{P14}">{sections}</p14:sectionLst></p:ext></p:extLst>'
-        )
-        prs.part._element.append(ext)
-    return make_deck(build, name="sectioned.pptx")
-
-
-def _sections(prs):
-    return [[int(r.get("id")) for r in sec.iter(f"{{{P14}}}sldId")] for sec in prs.part._element.iter(f"{{{P14}}}section")]
-
-
-def _consistent(prs):
-    flat = [i for sec in _sections(prs) for i in sec]
-    assert flat == [s.slide_id for s in prs.slides]  # exactly one section each, same order
-
-
 def test_sections_follow_added_and_moved_slides(make_deck, tmp_path):
-    path = _sectioned(make_deck)
+    path = sectioned_deck(make_deck)
     prs = open_presentation(path)
     a1, a2, b1 = (s.slide_id for s in prs.slides)
     new = slides.add_slide(prs, "Blank", after=prs.slides[0])  # after s1: section A
-    assert _sections(prs) == [[a1, new.slide_id, a2], [b1]]; _consistent(prs)
+    assert sections(prs) == [[a1, new.slide_id, a2], [b1]]; assert_sections_consistent(prs)
     end = slides.add_slide(prs, "Blank")  # appended after s3: section B
-    assert _sections(prs) == [[a1, new.slide_id, a2], [b1, end.slide_id]]; _consistent(prs)
+    assert sections(prs) == [[a1, new.slide_id, a2], [b1, end.slide_id]]; assert_sections_consistent(prs)
     slides.move_slide(prs, end, 1)  # first position: first section
-    assert _sections(prs)[0][0] == end.slide_id; _consistent(prs)
+    assert sections(prs)[0][0] == end.slide_id; assert_sections_consistent(prs)
     slides.move_slide(prs, prs.slides[0], 5)  # last position: last section
-    assert _sections(prs)[1][-1] == end.slide_id; _consistent(prs)
+    assert sections(prs)[1][-1] == end.slide_id; assert_sections_consistent(prs)
     slides.move_slide(prs, prs.slides[4], 3)  # into the middle of A
-    assert end.slide_id in _sections(prs)[0]; _consistent(prs)
+    assert end.slide_id in sections(prs)[0]; assert_sections_consistent(prs)
     out = tmp_path / "out.pptx"; prs.save(out)
-    _consistent(open_presentation(out))
+    assert_sections_consistent(open_presentation(out))
 
 
 def test_section_for_slide_added_to_emptied_deck(make_deck):
-    prs = open_presentation(_sectioned(make_deck))
+    prs = open_presentation(sectioned_deck(make_deck))
     for s in list(prs.slides):
         slides.delete_slide(prs, s)
     new = slides.add_slide(prs, "Blank")
-    assert _sections(prs) == [[], [new.slide_id]]
-    _consistent(prs)
+    assert sections(prs) == [[], [new.slide_id]]
+    assert_sections_consistent(prs)
 
 
 # --- failure handling -------------------------------------------------------------------------
@@ -269,3 +238,17 @@ def test_slide_number_text_follows_position(make_deck):
     numbers = [next(ph for ph in s.placeholders if ph.placeholder_format.type == PP_PLACEHOLDER.SLIDE_NUMBER).text_frame.text
                for s in open_presentation(deck).slides]
     assert numbers == ["1", "2", "3"]
+
+
+def _unique_part_names(path) -> bool:
+    import zipfile
+
+    names = zipfile.ZipFile(path).namelist()
+    return len(names) == len(set(names))
+
+
+def test_delete_then_add_keeps_part_names_unique(deck_with_two_slides):
+    # python-pptx names a new slide part after the slide count; a deleted slide must not make that name collide
+    apply_changeset(deck_with_two_slides, {"ops": [{"op": "delete_slide", "slide": 1}, {"op": "add_slide", "layout": "Blank"}]})
+    assert _unique_part_names(deck_with_two_slides)
+    assert [s.slide_layout.name for s in open_presentation(deck_with_two_slides).slides] == ["Title Only", "Blank"]

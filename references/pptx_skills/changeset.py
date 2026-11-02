@@ -1,5 +1,6 @@
 """Apply a validated JSON change set to a working copy: all ops succeed or nothing is written."""
 
+import copy
 import json
 import os
 import re
@@ -8,12 +9,14 @@ from importlib import resources
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
+from pptx.oxml.ns import qn
 
 from . import cli, slides
 from .brief import load_brief
 from .deckdir import changed_externally, find_deck_dir, load_deck, record_apply
 from .errors import PptxSkillsError
 from .geometry import absolute_box
+from .inventory import shape_text
 from .opc import lock_file, open_presentation, save_presentation
 from .roles import placeholder_role
 
@@ -30,6 +33,9 @@ class Context:
     last_slide: object = None
     touched: set[int] = field(default_factory=set)
     messages: list[str] = field(default_factory=list)
+    # deck.json `cloned_texts` as it will be written: {slide id: {shape id: example text}}
+    cloned_texts: dict = field(default_factory=dict)
+    sources: dict = field(default_factory=dict)  # resolved path -> opened source deck
 
 
 OPS: dict = {}
@@ -86,7 +92,7 @@ def _role_of(shape, title_box) -> str:
 def _walk(shapes):
     for shape in shapes:
         yield shape
-        if shape.shape_type is not None and shape.shape_type.name == "GROUP":
+        if shape._element.tag == qn("p:grpSp"):
             yield from _walk(shape.shapes)
 
 
@@ -159,10 +165,13 @@ def apply_changeset(deck_path: Path, changeset: dict) -> dict:
         brief=load_brief(deck_dir) if deck_dir else None,
         examples_path=deck["sources"].get("examples") if deck else None,
         messages=messages,
+        cloned_texts=copy.deepcopy(deck.get("cloned_texts") or {}) if deck else {},
     )
     _run(ctx, changeset["ops"])
     live = {s.slide_id for s in ctx.prs.slides}
     touched = sorted(ctx.touched & live)
+    live_keys = {str(i) for i in live}
+    ctx.cloned_texts = {k: v for k, v in ctx.cloned_texts.items() if k in live_keys}  # also drops deleted slides
     seq = _write(ctx, changeset, before, touched)
     return {"seq": seq, "touched": touched, "messages": messages}
 
@@ -186,7 +195,7 @@ def _write(ctx: Context, changeset: dict, before: bytes, touched: list[int]) -> 
         replaced = True
         if deck_dir is None:
             return None
-        return record_apply(deck_dir, changeset, _label(changeset), before, touched, new_hash)
+        return record_apply(deck_dir, changeset, _label(changeset), before, touched, new_hash, ctx.cloned_texts)
     except OSError as exc:
         _rollback(deck_path, deck_dir, before, saved, replaced)
         raise PptxSkillsError(f"could not write {deck_path}; nothing was changed: {exc}") from exc
@@ -230,6 +239,7 @@ def _add_slide(ctx: Context, spec: dict) -> None:
     slide = slides.add_slide(ctx.prs, spec["layout"], after)
     ctx.last_slide = slide
     ctx.touched.add(slide.slide_id)
+    ctx.cloned_texts.pop(str(slide.slide_id), None)  # a reused slide id must not inherit example texts
 
 
 @op("delete_slide")
@@ -248,6 +258,87 @@ def _move_slide(ctx: Context, spec: dict) -> None:
     slide = slides.resolve_slide(ctx.prs, spec["slide"], ctx.last_slide)
     slides.move_slide(ctx.prs, slide, spec["to"])
     ctx.touched.add(slide.slide_id)
+
+
+def _source(ctx: Context, ref: dict):
+    """(presentation, slide, kind) for a `from` ref; kind is "examples", "self" or "other"."""
+    deck = ref["deck"]
+    examples = Path(ctx.examples_path).resolve() if ctx.examples_path else None
+    if deck == "self":
+        prs, kind = ctx.prs, "self"
+    else:
+        if deck == "examples":
+            if ctx.deck_dir is None:
+                raise PptxSkillsError(f'"examples" needs the examples deck of a deck folder; {ctx.deck_path.name} is not inside a deck folder, so give the path of the deck instead')
+            if examples is None:
+                raise PptxSkillsError(f"this deck folder has no examples deck; add one with `pptx init {ctx.deck_dir} --reuse --examples <deck.pptx>` or give the path of the deck")
+            path = examples
+        else:
+            path = Path(deck).resolve()
+        if path == ctx.deck_path.resolve():
+            prs, kind = ctx.prs, "self"
+        else:
+            if str(path) not in ctx.sources:
+                ctx.sources[str(path)] = open_presentation(path)
+            prs, kind = ctx.sources[str(path)], "examples" if path == examples else "other"
+    try:
+        slide = slides.resolve_slide(prs, ref["slide"], ctx.last_slide if kind == "self" else None)
+    except PptxSkillsError as exc:
+        raise PptxSkillsError(f"from {deck}: {exc}") from exc
+    return prs, slide, kind
+
+
+def _example_texts(slide) -> dict[str, str]:
+    """{shape id: text} of a slide's text shapes, without the master's date, footer and slide number."""
+    texts = {}
+    for shape in _walk(slide.shapes):
+        if shape.is_placeholder and shape.placeholder_format.type in slides.FOOTER_TYPES:
+            continue
+        text = shape_text(shape)
+        if text.strip():
+            texts[str(shape.shape_id)] = text
+    return texts
+
+
+def _copied(ctx: Context, slide, kind: str, carried: dict | None, deck: str, notes: list[str]) -> None:
+    """Bookkeeping after a slide was copied in: `$last`, touched ids, notes and the recorded example texts.
+
+    Text from the examples deck is recorded so `check` flags it while it is unchanged; a duplicate keeps
+    the record of its source (`carried`); slides from the user's own decks carry real content and record nothing.
+    """
+    ctx.last_slide = slide
+    ctx.touched.add(slide.slide_id)
+    ctx.messages.extend(f"from {deck}: {note}" for note in notes)
+    record = _example_texts(slide) if kind == "examples" else carried
+    if record:
+        ctx.cloned_texts[str(slide.slide_id)] = copy.deepcopy(record)
+    else:
+        ctx.cloned_texts.pop(str(slide.slide_id), None)
+
+
+def _carried_texts(ctx: Context, slide, kind: str) -> dict | None:
+    """The example-text record a duplicate of `slide` inherits."""
+    return ctx.cloned_texts.get(str(slide.slide_id)) if kind == "self" else None
+
+
+@op("clone_slide")
+def _clone_slide(ctx: Context, spec: dict) -> None:
+    src_prs, src_slide, kind = _source(ctx, spec["from"])
+    after = slides.resolve_slide(ctx.prs, spec["after"], ctx.last_slide) if "after" in spec else None
+    carried = _carried_texts(ctx, src_slide, kind)
+    notes: list[str] = []
+    slide = slides.clone_slide(src_prs, src_slide, ctx.prs, after, notes)
+    _copied(ctx, slide, kind, carried, spec["from"]["deck"], notes)
+
+
+@op("replace_slide")
+def _replace_slide(ctx: Context, spec: dict) -> None:
+    target = slides.resolve_slide(ctx.prs, spec["slide"], ctx.last_slide)
+    src_prs, src_slide, kind = _source(ctx, spec["from"])
+    carried = _carried_texts(ctx, src_slide, kind)  # read now: replacing a slide by itself drops the old one
+    notes: list[str] = []
+    slide = slides.replace_slide(ctx.prs, target, src_prs, src_slide, notes)
+    _copied(ctx, slide, kind, carried, spec["from"]["deck"], notes)
 
 
 # Ops modules register themselves on import; the bottom import avoids a cycle. Modules: ops_text, ops_shapes.

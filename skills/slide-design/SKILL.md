@@ -75,6 +75,9 @@ After `init`:
    the visual form ([visual-forms.md](references/visual-forms.md)), the layout (a name from the
    brief; free compositions start from the layout with only kicker and title) and the grid
    (`pptx grid`). If you cannot write the title as a statement, ask before you build.
+   When a building block in the brief's catalog fits the form (a lined table, KPI tiles), start
+   from it: `clone_slide` from `"examples"`, then replace every example text. `check` reports
+   example text left unchanged as `leftover-text`.
 3. **Apply one change set** ([changeset-format.md](references/changeset-format.md)). Write it to
    `decks/<slug>/change.json` and run `pptx apply decks/<slug>/<slug>.pptx decks/<slug>/change.json`.
    `apply` validates first and changes nothing on an error. On success it keeps a snapshot
@@ -94,7 +97,8 @@ After `init`:
 A slide can also be designed without a storyline, from a single prompt; skip the storyline parts.
 
 To change a slide, change its shapes (`set_text`, `update_shape`, `delete_shape`). Never delete
-and rebuild an existing slide: the user's hand edits would be lost.
+and rebuild an existing slide: the user's hand edits would be lost. For a variant, duplicate the
+slide with `clone_slide` from `"self"` and change the copy.
 
 ## The render-check-review loop
 
@@ -129,10 +133,10 @@ and says what bothers them.
 3. **Change those shapes** with a change set, then check, render and review as usual. Compare the
    new render with the screenshot side by side before you show it.
 
-If the screenshot shows a slide that is not in the working copy, ask for the deck it comes from.
-Importing that slide comes in a later version (`clone_slide`); until then build a new native slide
-modeled on it: structure from the screenshot, style from the brief. Never insert the screenshot as
-a picture.
+If the screenshot shows a slide that is not in the working copy, ask for the deck it comes from and
+import the slide with `clone_slide` (`"from": {"deck": "<their-deck.pptx>", "slide": N}`), then
+change it as asked. Without that deck, build a new native slide modeled on it: structure from the
+screenshot, style from the brief. Never insert the screenshot as a picture.
 
 ## Getting slides back
 
@@ -144,10 +148,12 @@ a picture.
 - **Lock file:** before you apply, look for `~$<slug>.pptx` in the deck folder (`ls decks/<slug>`).
   It means the deck is open in PowerPoint. Say so before you write: PowerPoint will not show your
   change until the user reloads, and saving from PowerPoint afterwards would overwrite it.
-- **Slides edited in the user's own deck** are meant to be imported into the working copy, replacing
-  their older versions while the storyline and change log stay. That import comes in a later
-  version (`replace_slide`). Until then ask the user; if they agree, re-init into a new folder,
-  `pptx init decks/<new-slug> --from <their-deck.pptx> --keep-slides`, and copy `storyline.md` across.
+- **Slides edited in the user's own deck** come back with `replace_slide`, which keeps position,
+  slide id, storyline and change log. Match each edited slide to its older version by title
+  (`pptx inventory <their-deck.pptx>` next to the working copy's inventory) and ask when unsure;
+  then replace it, `"from": {"deck": "<their-deck.pptx>", "slide": N}`. Their text is real
+  content, never example text. To start over from their deck instead:
+  `pptx init decks/<new-slug> --from <their-deck.pptx> --keep-slides`, then copy `storyline.md` across.
 
 ## The design method
 

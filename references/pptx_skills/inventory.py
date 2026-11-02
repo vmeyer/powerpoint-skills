@@ -114,10 +114,16 @@ def _text(shape) -> dict | None:
     return {"paragraphs": paragraphs, "autofit": autofit}
 
 
-def _plain_text(text: dict | None) -> str:
+def plain_text(text: dict | None) -> str:
+    """A shape's inventory text as one string: runs joined, line breaks and paragraphs as "\\n"."""
     if not text:
         return ""
     return "\n".join("".join(r["t"] for r in p["runs"]) for p in text["paragraphs"])
+
+
+def shape_text(shape) -> str:
+    """The plain text of a python-pptx shape, exactly as the inventory reports it."""
+    return plain_text(_text(shape))
 
 
 def _rotation(shape) -> float:
@@ -164,7 +170,7 @@ def _title_box(slide) -> Box | None:
 def _role_text(shapes: list[dict], role: str) -> str | None:
     for shape in shapes:
         if shape["kind"] == "placeholder" and shape["role"] == role:
-            return _plain_text(shape["text"])
+            return plain_text(shape["text"])
     return None
 
 
@@ -206,7 +212,7 @@ def _lines(shapes: list[dict], depth: int) -> list[str]:
     for s in shapes:
         x, y, w, h = s["box"]
         line = f"{'  ' * depth}- [{s['id']}] {s['name']} {s['kind']}/{s['role']} @ {_g(x)},{_g(y)} {_g(w)}×{_g(h)}"
-        text = " / ".join(t for t in _plain_text(s["text"]).split("\n") if t)
+        text = " / ".join(t for t in plain_text(s["text"]).split("\n") if t)
         if text:
             line += f': "{text if len(text) <= 60 else text[:59] + "…"}"'
         out.append(line)

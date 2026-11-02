@@ -22,6 +22,8 @@ Outside a deck folder (no `deck.json` next to the file) `apply` still works but 
 | [`add_slide`](#add_slide) | add a slide with a layout of the master |
 | [`delete_slide`](#delete_slide) | remove a slide |
 | [`move_slide`](#move_slide) | move a slide to another position |
+| [`clone_slide`](#clone_slide) | copy a slide from the examples deck or another deck, or duplicate one |
+| [`replace_slide`](#replace_slide) | put a slide from another deck in place of a slide, keeping its position and id |
 | [`set_text`](#set_text) | write the text of a placeholder or shape |
 | [`add_shape`](#add_shape) | add a rectangle, rounded rectangle, arrow, chevron, ellipse or text box |
 | [`add_line`](#add_line) | add a straight line, with arrowheads if wanted |
@@ -30,8 +32,8 @@ Outside a deck folder (no `deck.json` next to the file) `apply` still works but 
 | [`z_order`](#delete_shape-z_order-group-ungroup) | bring a shape to the front or send it back |
 | [`group`, `ungroup`](#delete_shape-z_order-group-ungroup) | group shapes or dissolve a group |
 
-Coming in a later version (rejected by `apply` until then): cloning and replacing slides, tables,
-charts, pictures and speaker notes.
+Coming in a later version (rejected by `apply` until then): ops for tables, charts, pictures and speaker
+notes. A cloned slide already brings its tables, charts and pictures along.
 
 ## Envelope
 
@@ -50,7 +52,7 @@ Wherever an op takes a slide (`slide`, `after`):
 |---|---|
 | `3` | 1-based slide number at the time the op runs (earlier ops in the same change set count) |
 | `"id:258"` | the slide with this slide id (stable across moves; see the touched ids in the output) |
-| `"$last"` | the slide created by the latest `add_slide` in this change set (an error if there is none) |
+| `"$last"` | the slide created by the latest `add_slide`, `clone_slide` or `replace_slide` in this change set (an error if there is none) |
 
 `pptx inventory <deck.pptx>` lists every slide as `## Slide <number> (id <id>) — <layout>`.
 
@@ -109,8 +111,55 @@ Moves a slide so that it ends up at the 1-based position `to`.
 {"op": "move_slide", "slide": "$last", "to": 1}
 ```
 
-In decks with sections, an added or moved slide joins the section of the slide it now follows (the first
-section when it becomes slide 1), so every slide stays in exactly one section.
+In decks with sections, an added, cloned or moved slide joins the section of the slide it now follows (the
+first section when it becomes slide 1), so every slide stays in exactly one section. A replaced slide keeps its
+sections.
+
+### clone_slide
+
+Copies a slide into the working copy after the slide `after`; at the end when `after` is omitted. The copy
+becomes `"$last"`. `from.slide` is the slide's number (or `"id:<n>"`) in the deck that `from.deck` names:
+
+| `from.deck` | Source |
+|---|---|
+| `"examples"` | the examples deck given to `pptx init --examples` (numbers as in `style/examples.png` and the building-blocks catalog) |
+| `"self"` | the working copy itself: a duplicate; `from.slide` may also be `"$last"` |
+| a path | any other `.pptx` or `.potx`, absolute or relative to the current folder |
+
+The copy gets the working copy's layout of the same name and keeps every shape, the background, pictures, charts
+with their data, tables, groups, web links and the speaker notes. Links to other slides survive only in a
+duplicate, and PowerPoint tags (add-in data) are dropped; `apply` reports both as notes. A missing layout name
+stops with the list of available layouts. A slide with an embedded object, video, audio or SmartArt stops with
+`slide N uses <type>, which cannot be cloned`; build that slide from its layout instead.
+
+```json
+{"op": "clone_slide", "from": {"deck": "examples", "slide": 36}, "after": 2}
+```
+
+**Example text counts as leftover.** The texts of a slide cloned from the examples deck are recorded, and
+`check` reports every shape whose text is still the example's as `leftover-text` (an error). Replace each text
+with `set_text`, or delete the shape, before you show the slide. A duplicate keeps that record; slides from other
+decks carry real content and are not recorded.
+
+A variant of slide 3, right after it:
+
+```json
+{"label": "variant", "ops": [
+  {"op": "clone_slide", "from": {"deck": "self", "slide": 3}, "after": 3},
+  {"op": "set_text", "slide": "$last", "target": {"role": "title"}, "text": "The second variant halves the lead time"}
+]}
+```
+
+### replace_slide
+
+Puts a copy of a slide from another deck in place of `slide`: same position, same slide id (so `"id:<n>"` refs
+and the storyline stay valid), same sections. `from` and the copying work as in `clone_slide`. Use it to bring
+slides the user edited in their own deck back into the working copy. The replaced version is gone from the
+working copy; the snapshot of the apply keeps it. The new slide becomes `"$last"`.
+
+```json
+{"op": "replace_slide", "slide": "id:258", "from": {"deck": "board-deck.pptx", "slide": 4}}
+```
 
 ## Text
 

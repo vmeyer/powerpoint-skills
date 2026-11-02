@@ -1,15 +1,24 @@
 """Slide-level operations on an open presentation."""
 
 import copy
+import hashlib
 
 from lxml import etree
 from pptx.enum.shapes import PP_PLACEHOLDER
+from pptx.opc.constants import CONTENT_TYPE as CT
+from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+from pptx.opc.package import PartFactory
 from pptx.oxml.ns import qn
+from pptx.parts.chart import ChartPart
 
 from .errors import PptxSkillsError
 
 _P14 = "http://schemas.microsoft.com/office/powerpoint/2010/main"
-_FOOTER_TYPES = (PP_PLACEHOLDER.DATE, PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.SLIDE_NUMBER)
+_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+# markup-compatibility attributes whose values are lists of namespace prefixes
+_PREFIX_LISTS = ("Requires", f"{{{_MC}}}Ignorable", f"{{{_MC}}}MustUnderstand")
+FOOTER_TYPES = (PP_PLACEHOLDER.DATE, PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.SLIDE_NUMBER)
 
 
 def layout_named(prs, name: str):
@@ -95,6 +104,15 @@ def refresh_slide_numbers(prs) -> None:
                 text.text = str(number)
 
 
+def _renumber_slide_parts(prs) -> None:
+    """Name the slide parts slide1.xml … slideN.xml in slide order again, after a slide part was removed.
+
+    python-pptx names a new slide part after the slide count, so without this the next added slide would
+    take a name still in use, and a package with two parts of one name is broken.
+    """
+    prs.part.rename_slide_parts([sld_id.rId for sld_id in prs.slides._sldIdLst])
+
+
 def _place(prs, sld_id, index: int) -> None:
     """Move the `p:sldId` element to `index` (0-based), update its section and the slide numbers."""
     id_list = prs.slides._sldIdLst
@@ -114,7 +132,7 @@ def copy_footer_placeholders(slide, layout) -> None:
     present = {ph.placeholder_format.idx for ph in slide.placeholders}
     for source in layout.placeholders:
         idx = source.placeholder_format.idx
-        if source.placeholder_format.type not in _FOOTER_TYPES or idx in present:
+        if source.placeholder_format.type not in FOOTER_TYPES or idx in present:
             continue
         slide.shapes.clone_placeholder(source)
         body = source._element.find(qn("p:txBody"))
@@ -169,5 +187,250 @@ def delete_slide(prs, slide) -> None:
                 ref.getparent().remove(ref)
         prs.part.drop_rel(sld_id.rId)
         id_list.remove(sld_id)
+        _renumber_slide_parts(prs)
         refresh_slide_numbers(prs)
         return
+
+
+# --- copying slides between decks -------------------------------------------------------------
+
+def _layout_for(prs, source):
+    """The layout of `prs` named like the `source` layout: the same layout, else one under an equally named master."""
+    found = [layout for master in prs.slide_masters for layout in master.slide_layouts if layout.name == source.name]
+    if not found:
+        names = dict.fromkeys(layout.name for master in prs.slide_masters for layout in master.slide_layouts)
+        available = ", ".join(f'"{name}"' for name in names)
+        raise PptxSkillsError(f"layout '{source.name}' not in working copy; available: {available}")
+    for match in (lambda layout: layout.part is source.part, lambda layout: layout.slide_master.name == source.slide_master.name):
+        hit = next((layout for layout in found if match(layout)), None)
+        if hit is not None:
+            return hit
+    return found[0]
+
+
+def _refs(root) -> list:
+    """(element, attribute, rId) for every relationship reference in the subtree."""
+    return [
+        (el, name, value)
+        for el in root.iter()
+        if isinstance(el.tag, str)
+        for name, value in el.attrib.items()
+        if name.startswith(f"{{{_R}}}") and value
+    ]
+
+
+def _type_name(rel) -> str:
+    name = rel.reltype.rsplit("/", 1)[-1]
+    return "oleObject" if name == "package" else name  # an embedded Office file is an OLE object on a slide
+
+
+def _copyable(rel) -> bool:
+    if rel.reltype == RT.IMAGE:
+        return True
+    if rel.reltype == RT.HYPERLINK:
+        return rel.is_external
+    return rel.reltype in (RT.SLIDE, RT.CHART) and not rel.is_external
+
+
+def _sha1(part) -> str:
+    return hashlib.sha1(part.blob).hexdigest()
+
+
+class _SlideCopy:
+    """Copies one slide into a destination deck and re-creates every relationship its XML refers to.
+
+    Pictures (also SVG) are shared by content, charts get their own part and workbook, external links are
+    kept, links to other slides only within the same deck, PowerPoint tags are dropped. Anything else
+    (embedded objects, media, diagrams) is refused before the destination changes.
+    """
+
+    def __init__(self, src_prs, src_slide, dst_prs, notes: list[str] | None):
+        self.src, self.dst = src_slide, dst_prs
+        self.number = [s.slide_id for s in src_prs.slides].index(src_slide.slide_id) + 1
+        self.notes = notes if notes is not None else []
+        self.package = dst_prs.part.package
+        self.same_deck = src_prs.part.package is self.package
+        self._images = None  # sha1 -> image part of the destination, filled on first use
+
+    def make(self):
+        """Append the copy to the slide list (no section yet) and return it."""
+        layout = _layout_for(self.dst, self.src.slide_layout)
+        src = self.src._element
+        c_sld = src.find(qn("p:cSld"))
+        roots = [copy.deepcopy(el) for el in (c_sld.find(qn("p:spTree")), c_sld.find(qn("p:bg"))) if el is not None]
+        self._drop_tags(roots, c_sld)
+        for root in roots:
+            self._check(self.src.part, root)
+
+        slide = self.dst.slides.add_slide(layout)
+        sld = slide._element
+        tree = sld.find(qn("p:cSld")).find(qn("p:spTree"))
+        for child in list(tree):  # the placeholders python-pptx copied from the layout
+            tree.remove(child)
+        tree.extend(list(roots[0]))
+        if len(roots) > 1:
+            tree.addprevious(roots[1])
+        color_map = src.find(qn("p:clrMapOvr"))
+        if color_map is not None:
+            old = sld.find(qn("p:clrMapOvr"))
+            old.addprevious(copy.deepcopy(color_map))
+            sld.remove(old)
+        if src.get("showMasterSp") is not None:
+            sld.set("showMasterSp", src.get("showMasterSp"))
+        self._relink(tree, self.src.part, slide.part)
+        if len(roots) > 1:
+            self._relink(roots[1], self.src.part, slide.part)
+        self._declare_prefixes(sld, c_sld)
+        self._copy_notes(slide)
+        return slide
+
+    def _refuse(self, what: str):
+        raise PptxSkillsError(f"slide {self.number} uses {what}, which cannot be cloned")
+
+    def _drop_tags(self, roots, c_sld) -> None:
+        lists = [el for root in roots for el in root.iter(qn("p:custDataLst"))]
+        for el in lists:
+            el.getparent().remove(el)
+        if lists or c_sld.find(qn("p:custDataLst")) is not None:
+            self._note(f"slide {self.number}: its PowerPoint tags (add-in data) were not copied")
+
+    def _note(self, text: str) -> None:
+        if text not in self.notes:
+            self.notes.append(text)
+
+    def _check(self, part, root) -> None:
+        for _, _, rid in _refs(root):
+            rel = part.rels.get(rid)
+            if rel is None:
+                raise PptxSkillsError(f"slide {self.number} refers to relationship {rid}, which its deck does not have")
+            if not _copyable(rel):
+                self._refuse(_type_name(rel))
+            if rel.reltype == RT.CHART:
+                self._check_chart(rel.target_part)
+
+    def _check_chart(self, chart) -> None:
+        data = chart._element.find(qn("c:externalData"))
+        for el, _, rid in _refs(chart._element):
+            rel = chart.rels.get(rid)
+            if el is data:
+                if rel is None or rel.is_external:
+                    self._refuse("a chart linked to an external workbook")
+            elif rel is None or rel.reltype != RT.IMAGE:
+                self._refuse(f"a chart with {_type_name(rel) if rel is not None else 'a missing part'}")
+
+    def _relink(self, root, src_part, dst_part) -> None:
+        """Point every reference in `root` (already in `dst_part`) at a relationship of `dst_part`."""
+        new_ids = {}
+        for el, attr, rid in _refs(root):
+            if rid not in new_ids:
+                new_ids[rid] = self._relate(src_part.rels[rid], dst_part)
+            if new_ids[rid] is None:
+                el.getparent().remove(el)  # a link to another slide that does not exist here
+            else:
+                el.set(attr, new_ids[rid])
+
+    def _relate(self, rel, dst_part) -> str | None:
+        if rel.reltype == RT.IMAGE:
+            if rel.is_external:
+                return dst_part.relate_to(rel.target_ref, RT.IMAGE, is_external=True)
+            return dst_part.relate_to(self._image(rel.target_part), RT.IMAGE)
+        if rel.reltype == RT.HYPERLINK:
+            return dst_part.relate_to(rel.target_ref, RT.HYPERLINK, is_external=True)
+        if rel.reltype == RT.SLIDE:
+            if self.same_deck:
+                return dst_part.relate_to(rel.target_part, RT.SLIDE)
+            self._note(f"slide {self.number}: a link to another slide was removed; it only works inside its own deck")
+            return None
+        return self._chart(rel.target_part, dst_part)
+
+    def _image(self, part):
+        """The destination's image part with the same bytes, created when there is none."""
+        if self._images is None:
+            self._images = {}
+            for rel in self.package.iter_rels():
+                if rel.reltype == RT.IMAGE and not rel.is_external:
+                    self._images.setdefault(_sha1(rel.target_part), rel.target_part)
+        key = _sha1(part)
+        if key not in self._images:
+            name = self.package.next_image_partname(part.partname.ext)
+            self._images[key] = PartFactory(name, part.content_type, self.package, part.blob)
+        return self._images[key]
+
+    def _chart(self, source, dst_part) -> str:
+        """A new chart part with the source's XML and a copy of its embedded workbook."""
+        root = etree.fromstring(source.blob)
+        data = root.find(qn("c:externalData"))
+        workbook = None
+        if data is not None:
+            workbook = source.related_part(data.get(qn("r:id"))).blob
+            root.remove(data)
+        name = self.package.next_partname(ChartPart.partname_template)
+        chart = ChartPart.load(name, CT.DML_CHART, self.package, etree.tostring(root))
+        rid = dst_part.relate_to(chart, RT.CHART)  # reachable first, so the parts below get free names
+        self._relink(chart._element, source, chart)
+        if workbook is not None:
+            chart.chart_workbook.update_from_xlsx_blob(workbook)
+        return rid
+
+    def _declare_prefixes(self, sld, c_sld) -> None:
+        """Declare on the slide root the prefixes that copied markup-compatibility attributes name in their values.
+
+        lxml carries the namespaces of element and attribute names along with a copy, but not those only
+        named inside a value such as `mc:Choice Requires="a14"`; without them PowerPoint asks to repair the file.
+        """
+        wanted = {}
+        for el in c_sld.iter():
+            if not isinstance(el.tag, str):
+                continue
+            for attr in _PREFIX_LISTS:
+                for prefix in (el.get(attr) or "").split():
+                    if prefix in el.nsmap and prefix not in sld.nsmap:
+                        wanted[prefix] = el.nsmap[prefix]
+        if wanted:
+            keep = [*wanted, *(prefix for prefix in sld.nsmap if prefix)]
+            etree.cleanup_namespaces(sld, top_nsmap=wanted, keep_ns_prefixes=keep)
+
+    def _copy_notes(self, slide) -> None:
+        if not self.src.has_notes_slide:
+            return
+        frame = self.src.notes_slide.notes_text_frame
+        if frame is None or not frame.text.strip():
+            return
+        target = slide.notes_slide.notes_text_frame
+        if target is not None:
+            target.text = frame.text
+
+
+def clone_slide(src_prs, src_slide, dst_prs, after=None, notes: list[str] | None = None):
+    """Copy `src_slide` of `src_prs` into `dst_prs` after `after` (at the end when None); return the copy.
+
+    The copy uses the destination layout of the same name and keeps shapes, background, pictures, charts
+    with their data, external links and the notes text. It joins the section of the slide before it.
+    Messages for the user (dropped tags or links) are appended to `notes`. Raises before `dst_prs` changes
+    when the layout is missing or the slide uses parts that cannot be copied. `src_prs` may be `dst_prs`.
+    """
+    slide = _SlideCopy(src_prs, src_slide, dst_prs, notes).make()
+    id_list = dst_prs.slides._sldIdLst
+    index = len(id_list) - 1
+    if after is not None:
+        index = [s.id for s in id_list].index(after.slide_id) + 1
+    _place(dst_prs, id_list[-1], index)
+    return slide
+
+
+def replace_slide(dst_prs, target, src_prs, src_slide, notes: list[str] | None = None):
+    """Put a copy of `src_slide` in place of `target`: same position, slide id, sections and custom shows."""
+    slide = _SlideCopy(src_prs, src_slide, dst_prs, notes).make()
+    id_list = dst_prs.slides._sldIdLst
+    new = id_list[-1]
+    old = next(s for s in id_list if s.id == target.slide_id)
+    old_rid = old.rId
+    for ref in dst_prs.part._element.iter(qn("p:sld")):  # custom shows reference the relationship id
+        if ref.get(qn("r:id")) == old_rid:
+            ref.set(qn("r:id"), new.rId)
+    old.rId = new.rId
+    id_list.remove(new)
+    dst_prs.part.drop_rel(old_rid)
+    _renumber_slide_parts(dst_prs)
+    refresh_slide_numbers(dst_prs)
+    return slide

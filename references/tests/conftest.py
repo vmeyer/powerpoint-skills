@@ -151,6 +151,129 @@ def deck_dir_from_default(tmp_path, default_pptx):
     return deck_dir
 
 
+def apply(deck, ops, label=None):
+    """Apply `ops` as one change set to the working copy `deck` and return the result."""
+    from pptx_skills.changeset import apply_changeset
+
+    return apply_changeset(deck, {"ops": ops} if label is None else {"label": label, "ops": ops})
+
+
+P14 = "http://schemas.microsoft.com/office/powerpoint/2010/main"
+
+
+def sectioned_deck(make_deck):
+    """Three slides in sections A [s1, s2] and B [s3]."""
+    from lxml import etree
+
+    def build(prs):
+        for _ in range(3):
+            prs.slides.add_slide(layout_named(prs, "Blank"))
+        ids = [s.id for s in prs.slides._sldIdLst]
+        sections = "".join(
+            f'<p14:section name="{n}" id="{{0000000{i}-0000-0000-0000-000000000000}}"><p14:sldIdLst>'
+            + "".join(f'<p14:sldId id="{x}"/>' for x in members) + "</p14:sldIdLst></p14:section>"
+            for i, (n, members) in enumerate((("A", ids[:2]), ("B", ids[2:])), 1)
+        )
+        ext = etree.fromstring(
+            '<p:extLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}">'
+            f'<p14:sectionLst xmlns:p14="{P14}">{sections}</p14:sectionLst></p:ext></p:extLst>'
+        )
+        prs.part._element.append(ext)
+    return make_deck(build, name="sectioned.pptx")
+
+
+def sections(prs):
+    return [[int(r.get("id")) for r in sec.iter(f"{{{P14}}}sldId")] for sec in prs.part._element.iter(f"{{{P14}}}section")]
+
+
+def assert_sections_consistent(prs):
+    flat = [i for sec in sections(prs) for i in sec]
+    assert flat == [s.slide_id for s in prs.slides]  # exactly one section each, same order
+
+
+def png_bytes(color=(200, 30, 30), size=(40, 30)) -> bytes:
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color).save(buffer, "PNG")
+    return buffer.getvalue()
+
+
+def title_slide(prs, title):
+    slide = prs.slides.add_slide(layout_named(prs, "Title Only"))
+    slide.shapes.title.text = title
+    return slide
+
+
+@pytest.fixture
+def examples_deck(make_deck):
+    """Slide 1: a PNG picture and a clustered column chart (categories A, B, C), no text.
+
+    Slide 2 ("Title Only"): an example title, a text box named "Example box" with a line break, and the
+    layout's date, footer and slide number.
+    """
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Cm
+
+    from pptx_skills.slides import copy_footer_placeholders
+
+    def build(prs):
+        slide = prs.slides.add_slide(layout_named(prs, "Blank"))
+        slide.shapes.add_picture(io.BytesIO(png_bytes()), Cm(2), Cm(2), Cm(4), Cm(3))
+        data = CategoryChartData()
+        data.categories = ["A", "B", "C"]
+        data.add_series("Sales", (1, 2, 3))
+        slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Cm(8), Cm(2), Cm(12), Cm(8), data)
+        slide = title_slide(prs, "Example title of the building block")
+        copy_footer_placeholders(slide, slide.slide_layout)
+        box = slide.shapes.add_textbox(Cm(2), Cm(6), Cm(10), Cm(3))
+        box.name = "Example box"
+        box.text_frame.text = "Example label\vsecond line"
+
+    return make_deck(build, name="examples.pptx")
+
+
+@pytest.fixture
+def deck_dir(tmp_path, default_pptx, examples_deck):
+    """A deck folder `decks/d` on the default template with `examples_deck` as its examples source."""
+    from pptx_skills.deckdir import init_deck
+
+    folder = tmp_path / "decks/d"
+    init_deck(folder, default_pptx, examples_deck)
+    return folder
+
+
+@pytest.fixture
+def deck_with_three_slides(make_deck):
+    return make_deck(lambda prs: [title_slide(prs, t) for t in ("First slide", "Second slide", "Third slide")], name="three.pptx")
+
+
+@pytest.fixture
+def other_deck(make_deck):
+    return make_deck(lambda prs: title_slide(prs, "From other deck"), name="other.pptx")
+
+
+@pytest.fixture
+def deck_with_unknown_layout(make_deck):
+    def build(prs):
+        layout_named(prs, "Title Only").name = "Special layout"
+        prs.slides.add_slide(layout_named(prs, "Special layout"))
+
+    return make_deck(build, name="unknown-layout.pptx")
+
+
+@pytest.fixture
+def deck_with_ole(make_deck):
+    from pptx.util import Cm
+
+    def build(prs):
+        slide = prs.slides.add_slide(layout_named(prs, "Blank"))
+        slide.shapes.add_ole_object(io.BytesIO(b"payload"), "Package", Cm(2), Cm(2), Cm(3), Cm(3))
+
+    return make_deck(build, name="ole.pptx")
+
+
 def finding(report, rule, shape=None):
     """The first finding of `rule` (optionally on the shape named `shape`); None when absent."""
     return next((f for f in report["findings"] if f["rule"] == rule and shape in (None, f["shape"])), None)
