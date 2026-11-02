@@ -86,7 +86,8 @@ All positions and sizes are centimetres from the top-left corner of the slide, a
 
 Adds a slide with the named layout after the slide `after`; at the end when `after` is omitted. The layout names
 are listed in `style/brief.md`; an unknown name lists the available layouts. The new slide becomes `"$last"`.
-Its placeholders (kicker, title, footer, number) come from the layout; fill them with `set_text`.
+Kicker and title come empty from the layout; fill them with `set_text`. Footer, slide number and date come
+from the layout with their text and fields; leave them.
 
 ```json
 {"op": "add_slide", "layout": "Title and Content", "after": 2}

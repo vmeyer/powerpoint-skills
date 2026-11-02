@@ -1,11 +1,15 @@
 """Slide-level operations on an open presentation."""
 
+import copy
+
 from lxml import etree
+from pptx.enum.shapes import PP_PLACEHOLDER
 from pptx.oxml.ns import qn
 
 from .errors import PptxSkillsError
 
 _P14 = "http://schemas.microsoft.com/office/powerpoint/2010/main"
+_FOOTER_TYPES = (PP_PLACEHOLDER.DATE, PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.SLIDE_NUMBER)
 
 
 def layout_named(prs, name: str):
@@ -78,13 +82,51 @@ def place_in_section(prs, slide_id: int, previous_id: int | None) -> None:
     lists[-1].append(new)  # the predecessor is in no section: keep the slide listed anyway
 
 
+def refresh_slide_numbers(prs) -> None:
+    """Write each slide's number into its slide-number fields, the cached text PowerPoint stores on save.
+
+    The field stays a field; the cached text is what `check` measures, so it must be the number, not the
+    layout's prompt.
+    """
+    for number, slide in enumerate(prs.slides, 1):
+        for field in slide.shapes._spTree.iter(qn("a:fld")):
+            text = field.find(qn("a:t"))
+            if field.get("type") == "slidenum" and text is not None:
+                text.text = str(number)
+
+
 def _place(prs, sld_id, index: int) -> None:
-    """Move the `p:sldId` element to `index` (0-based) and update its section."""
+    """Move the `p:sldId` element to `index` (0-based), update its section and the slide numbers."""
     id_list = prs.slides._sldIdLst
     id_list.remove(sld_id)
     id_list.insert(index, sld_id)
     previous = id_list[index - 1].id if index > 0 else None
     place_in_section(prs, sld_id.id, previous)
+    refresh_slide_numbers(prs)
+
+
+def copy_footer_placeholders(slide, layout) -> None:
+    """Put the layout's date, footer and slide-number placeholders on the slide, with their text and fields.
+
+    python-pptx leaves them out of a new slide; PowerPoint adds them when header and footer are on, and the
+    master's footer, number and date must appear on every slide. Position and formatting stay inherited.
+    """
+    present = {ph.placeholder_format.idx for ph in slide.placeholders}
+    for source in layout.placeholders:
+        idx = source.placeholder_format.idx
+        if source.placeholder_format.type not in _FOOTER_TYPES or idx in present:
+            continue
+        slide.shapes.clone_placeholder(source)
+        body = source._element.find(qn("p:txBody"))
+        if body is None:
+            continue
+        body = copy.deepcopy(body)
+        for tag in ("a:bodyPr", "a:lstStyle"):  # inherited from the layout; the slide keeps them empty
+            old = body.find(qn(tag))
+            if old is not None:
+                old.addprevious(etree.Element(qn(tag)))
+                body.remove(old)
+        slide.placeholders[idx]._element.append(body)
 
 
 def add_slide(prs, layout_name: str, after=None):
@@ -95,6 +137,7 @@ def add_slide(prs, layout_name: str, after=None):
     if after is not None:
         index = [s.id for s in id_list].index(after.slide_id) + 1
     slide = prs.slides.add_slide(layout)
+    copy_footer_placeholders(slide, layout)
     _place(prs, id_list[-1], index)
     return slide
 
@@ -126,4 +169,5 @@ def delete_slide(prs, slide) -> None:
                 ref.getparent().remove(ref)
         prs.part.drop_rel(sld_id.rId)
         id_list.remove(sld_id)
+        refresh_slide_numbers(prs)
         return

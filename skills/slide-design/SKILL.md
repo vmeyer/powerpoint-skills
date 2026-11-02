@@ -129,8 +129,10 @@ and says what bothers them.
 3. **Change those shapes** with a change set, then check, render and review as usual. Compare the
    new render with the screenshot side by side before you show it.
 
-If the screenshot shows a slide that is not in the working copy, build a new native slide modeled
-on it: structure from the screenshot, style from the brief. Never insert the screenshot as a picture.
+If the screenshot shows a slide that is not in the working copy, ask for the deck it comes from.
+Importing that slide comes in a later version (`clone_slide`); until then build a new native slide
+modeled on it: structure from the screenshot, style from the brief. Never insert the screenshot as
+a picture.
 
 ## Getting slides back
 
@@ -142,8 +144,10 @@ on it: structure from the screenshot, style from the brief. Never insert the scr
 - **Lock file:** before you apply, look for `~$<slug>.pptx` in the deck folder (`ls decks/<slug>`).
   It means the deck is open in PowerPoint. Say so before you write: PowerPoint will not show your
   change until the user reloads, and saving from PowerPoint afterwards would overwrite it.
-- To continue from the user's own edited deck, start a new deck folder from it:
-  `pptx init decks/<new-slug> --from <their-deck.pptx> --keep-slides`.
+- **Slides edited in the user's own deck** are meant to be imported into the working copy, replacing
+  their older versions while the storyline and change log stay. That import comes in a later
+  version (`replace_slide`). Until then ask the user; if they agree, re-init into a new folder,
+  `pptx init decks/<new-slug> --from <their-deck.pptx> --keep-slides`, and copy `storyline.md` across.
 
 ## The design method
 
@@ -164,7 +168,8 @@ on it: structure from the screenshot, style from the brief. Never insert the scr
 ### Visual
 
 7. **Use the master.** Layout placeholders for kicker, title, footer and number; free shapes only
-   inside the content area.
+   inside the content area. Kicker and title come empty from the layout; fill them with `set_text`.
+   Footer, slide number and date come from the layout with their text and fields; leave them.
 8. **Align to the grid.** Edges line up, gutters are equal, equal roles get equal sizes. Take boxes
    from `pptx grid`; never estimate them.
 9. **Color has meaning.** Theme colors only. One color family for value and emphasis, neutral

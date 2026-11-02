@@ -2,9 +2,13 @@ import json
 
 import pytest
 from lxml import etree
+from pptx.enum.shapes import PP_PLACEHOLDER
+from pptx.oxml.ns import qn
+from pptx.util import Cm
 
 from conftest import layout_named
 from pptx_skills.changeset import apply_changeset
+from pptx_skills.checks import run_checks
 from pptx_skills.cli import main
 from pptx_skills.deckdir import load_deck
 from pptx_skills.errors import PptxSkillsError
@@ -211,3 +215,57 @@ def test_failure_inside_record_apply_rolls_back(deck_dir_from_default, monkeypat
     with pytest.raises(PptxSkillsError, match="nothing was changed"):
         apply_changeset(deck_dir_from_default / "d.pptx", {"ops": [{"op": "add_slide", "layout": "Blank"}]})
     assert _state(deck_dir_from_default) == state
+
+
+def _footer_layout_deck(make_deck):
+    """Default template whose "Title Only" layout has a footer text besides its date and slide-number fields.
+
+    The slide-number box is narrow and its cached field text a long prompt, as in real masters: only the
+    number itself fits.
+    """
+    def build(prs):
+        layout = layout_named(prs, "Title Only")
+        kinds = {ph.placeholder_format.type: ph for ph in layout.placeholders}
+        kinds[PP_PLACEHOLDER.FOOTER].text_frame.text = "|   Example Ltd"
+        number = kinds[PP_PLACEHOLDER.SLIDE_NUMBER]
+        number.width, number.height = Cm(1), Cm(1)
+        number._element.find(".//" + qn("a:fld")).find(qn("a:t")).text = "‹Nr.›"
+
+    return make_deck(build, name="footer.pptx")
+
+
+def _fields(shape) -> list[str]:
+    return [f.get("type") for f in shape._element.iter(qn("a:fld"))]
+
+
+def test_add_slide_copies_date_footer_and_number(make_deck):
+    deck = _footer_layout_deck(make_deck)
+    apply_changeset(deck, {"ops": [
+        {"op": "add_slide", "layout": "Title Only"},
+        {"op": "set_text", "slide": "$last", "target": {"role": "title"}, "text": "Footers come from the layout"}]})
+    slide = open_presentation(deck).slides[0]
+    layout = {ph.placeholder_format.type: ph for ph in slide.slide_layout.placeholders}
+    placed = {ph.placeholder_format.type: ph for ph in slide.placeholders}
+    for kind in (PP_PLACEHOLDER.DATE, PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.SLIDE_NUMBER):
+        assert kind in placed, kind
+        assert placed[kind].placeholder_format.idx == layout[kind].placeholder_format.idx
+        if kind != PP_PLACEHOLDER.SLIDE_NUMBER:
+            assert placed[kind].text_frame.text == layout[kind].text_frame.text
+    assert placed[PP_PLACEHOLDER.FOOTER].text_frame.text == "|   Example Ltd"
+    assert _fields(placed[PP_PLACEHOLDER.SLIDE_NUMBER]) == ["slidenum"]
+    assert placed[PP_PLACEHOLDER.SLIDE_NUMBER].text_frame.text == "1"  # cached field text, as PowerPoint stores it
+    assert _fields(placed[PP_PLACEHOLDER.DATE]) == _fields(layout[PP_PLACEHOLDER.DATE]) != []
+    assert len({s.shape_id for s in slide.shapes}) == len(slide.shapes)
+
+    report = run_checks(deck, all_slides=True)
+    assert not [f for f in report["findings"] if f["rule"] == "empty-placeholder"]
+    assert report["summary"]["error"] == 0
+
+
+def test_slide_number_text_follows_position(make_deck):
+    deck = _footer_layout_deck(make_deck)
+    apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Title Only"}, {"op": "add_slide", "layout": "Title Only"},
+                                   {"op": "add_slide", "layout": "Title Only", "after": 1}]})
+    numbers = [next(ph for ph in s.placeholders if ph.placeholder_format.type == PP_PLACEHOLDER.SLIDE_NUMBER).text_frame.text
+               for s in open_presentation(deck).slides]
+    assert numbers == ["1", "2", "3"]
