@@ -250,7 +250,8 @@ def _move_slide(ctx: Context, spec: dict) -> None:
     ctx.touched.add(slide.slide_id)
 
 
-from . import ops_text  # noqa: E402,F401  (registers the text ops; bottom import avoids a cycle)
+# Ops modules register themselves on import; the bottom import avoids a cycle. Modules: ops_text, ops_shapes.
+from . import ops_shapes, ops_text  # noqa: E402,F401
 
 
 def _handle_apply(args) -> int:

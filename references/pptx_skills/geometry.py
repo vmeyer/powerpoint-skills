@@ -66,3 +66,18 @@ def absolute_box(shape) -> Box:
                 w, h = w * sx, h * sy
         parent = parent.getparent()
     return Box(*(round(v / EMU_PER_CM, 2) for v in (x, y, w, h)))
+
+
+def _snap_edge(value: float, lines: list[float], tol: float) -> float:
+    near = min(lines, key=lambda line: abs(line - value), default=None)
+    return near if near is not None and abs(near - value) <= tol else value
+
+
+def snap_box(box: Box, xs: list[float], ys: list[float], tol: float) -> Box:
+    """Snap each edge to the nearest vertical (`xs`) or horizontal (`ys`) line within `tol` cm.
+
+    Edges move independently, so a snapped left edge with a free right edge changes the width.
+    """
+    left, right = _snap_edge(box.x, xs, tol), _snap_edge(box.right, xs, tol)
+    top, bottom = _snap_edge(box.y, ys, tol), _snap_edge(box.bottom, ys, tol)
+    return Box(round(left, 2), round(top, 2), round(right - left, 2), round(bottom - top, 2))

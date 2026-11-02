@@ -134,3 +134,48 @@ Kicker (the small label above the title), where the master has one:
 ```json
 {"op": "set_text", "slide": 1, "target": {"role": "kicker"}, "text": "CLASSIFICATION"}
 ```
+
+## Shapes
+
+Compose slides from native shapes. Colors are theme roles (`accent1+60`, `dk2-25`, `none`); a raw `#RRGGBB` is rejected unless the op sets `"allow_rgb": true`. Boxes are `[x, y, w, h]` in cm and snap to the master's grid (content-area edges and guides, within `rules.snap_cm`) when the deck has a style brief. Every shape gets the `name` you give it; a name already used on the slide is an error.
+
+`shape` is one of `rect`, `roundRect`, `homePlate` (pentagon arrow), `chevron`, `rightArrow`, `leftArrow`, `upArrow`, `downArrow`, `ellipse`, `textbox` (no fill). Optional fields: `fill`, `line` (`"none"` or `{"color", "width_pt", "dash"}`), `pattern`, `text` or `paragraphs` (same shorthand as `set_text`), `font`, `align` (`left|center|right`), `anchor` (`top|middle|bottom`), `insets` `[l,t,r,b]` cm, `radius` (0-0.5, roundRect only).
+
+Matrix cell with a bold label followed by plain text:
+
+```json
+{"op": "add_shape", "slide": 1, "name": "cell-r1", "shape": "rect", "box": [1.5, 5, 8, 2],
+ "fill": "accent1+60", "line": "none", "text": "**No goal**\nNot worth it", "font": {"size": 12, "color": "dk1"}, "anchor": "middle"}
+```
+
+Hatched area (OOXML pattern preset, foreground and background colors):
+
+```json
+{"op": "add_shape", "slide": 1, "name": "hatch", "shape": "rect", "box": [10, 5, 6, 4],
+ "pattern": {"preset": "wdUpDiag", "fg": "accent6", "bg": "lt1"}, "line": "none"}
+```
+
+Arrow line (`head` is the start, `tail` the end; `none`, `triangle` or `arrow`):
+
+```json
+{"op": "add_line", "slide": 1, "name": "path", "from": [10, 8], "to": [14, 8], "color": "dk1", "width_pt": 3, "tail": "triangle"}
+```
+
+Badge:
+
+```json
+{"op": "add_shape", "slide": 1, "name": "badge-1", "shape": "ellipse", "box": [1.5, 3, 1, 1],
+ "fill": "accent2", "line": "none", "text": "1", "font": {"size": 12, "color": "lt1", "bold": true}, "align": "center", "anchor": "middle"}
+```
+
+Change, order, group and remove (a group encloses its children exactly; ungroup keeps every child at its place on the slide):
+
+```json
+{"op": "update_shape", "slide": 1, "target": {"name": "badge-1"}, "box": [2, 3, 1, 1], "fill": "accent3"}
+{"op": "z_order", "slide": 1, "target": {"name": "badge-1"}, "to": "front"}
+{"op": "group", "slide": 1, "targets": [{"name": "cell-r1"}, {"name": "badge-1"}], "name": "row-1"}
+{"op": "ungroup", "slide": 1, "target": {"name": "row-1"}}
+{"op": "delete_shape", "slide": 1, "target": {"name": "hatch"}}
+```
+
+`update_shape` takes any `add_shape` field except `shape`, plus `name` to rename. Lines accept only `name` and `line`; delete and re-add a line to move it. Boxes of shapes inside a group cannot be changed; ungroup first.
