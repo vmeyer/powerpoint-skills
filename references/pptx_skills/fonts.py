@@ -10,8 +10,9 @@ inheritance chain where the first explicit value wins:
 
 At every list-style step the paragraph level (`a:pPr lvl`, default 0) selects `a:lvl{lvl+1}pPr`.
 Paragraph spacing (`lnSpc`, `spcBef`, `spcAft`) and the left margin (`marL`) follow the same chain
-from `a:pPr` on. Body insets and wrapping follow the shape's, the layout placeholder's and the
-master placeholder's `a:bodyPr`.
+from `a:pPr` on. Body properties (insets, wrapping, autofit) follow the shape's, the layout
+placeholder's and the master placeholder's `a:bodyPr`. Malformed numbers count as absent, so the
+next source in the chain applies.
 """
 
 import math
@@ -30,12 +31,14 @@ from .geometry import absolute_box
 from .units import EMU_PER_CM, EMU_PER_PT
 
 DEFAULT_SIZE_PT = 18.0
-LINE_HEIGHT = 1.2  # single line spacing as a multiple of the font size
+FALLBACK_LINE_HEIGHT = 1.2  # single line height as a multiple of the size when the font is missing
 _SCALE = 10  # fonts are measured at 10x size for sub-point precision
 
 # ECMA-376 defaults: 0.1 in left/right, 0.05 in top/bottom (0.25 cm / 0.13 cm).
 _DEFAULT_INSETS = {"lIns": 91440, "tIns": 45720, "rIns": 91440, "bIns": 45720}
+_AUTOFIT = {qn("a:noAutofit"): "none", qn("a:normAutofit"): "shrink", qn("a:spAutoFit"): "shape"}
 
+_OFFICE_FONTS = "Microsoft PowerPoint.app/Contents/Resources/DFonts"
 _FONT_DIRS = (
     "/System/Library/Fonts",
     "/System/Library/Fonts/Supplemental",
@@ -43,6 +46,8 @@ _FONT_DIRS = (
     "~/Library/Fonts",
     "/usr/share/fonts",
     "~/.fonts",
+    f"/Applications/{_OFFICE_FONTS}",  # fonts that ship only with Office, such as Calibri
+    f"~/Applications/{_OFFICE_FONTS}",
 )
 _FONT_SUFFIXES = frozenset({".ttf", ".otf", ".ttc", ".otc"})
 _COLLECTION_SUFFIXES = frozenset({".ttc", ".otc"})
@@ -70,13 +75,40 @@ class RunStyle:
 
 @dataclass
 class Measurement:
-    """Wrapped text of one shape. `height_cm` includes the top and bottom insets, so it compares
-    directly with the shape's height."""
+    """Wrapped text of one shape, measured at the declared sizes.
+
+    `height_cm` includes the top and bottom insets, so it compares directly with the shape's
+    height. `autofit` is the resolved mode: "none", "shrink" (normAutofit) or "shape" (spAutoFit);
+    `font_scale` and `line_spacing_reduction` are normAutofit's stored values (1.0 and 0.0 otherwise).
+    """
 
     lines_per_paragraph: list[int]
     height_cm: float
     widest_word_cm: float
     fonts_missing: set[str]
+    autofit: str = "none"
+    font_scale: float = 1.0
+    line_spacing_reduction: float = 0.0
+
+
+def _int(value: str | None) -> int | None:
+    """An integer attribute; None when absent or malformed."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _percent(value: str | None) -> float | None:
+    """A percentage as a fraction: 1/1000 % as an integer ("62500") or a string ("62.5%")."""
+    if value is None:
+        return None
+    try:
+        return float(value[:-1]) / 100 if value.endswith("%") else int(value) / 100000
+    except ValueError:
+        return None
 
 
 # --- inheritance -------------------------------------------------------------------------------
@@ -93,9 +125,9 @@ def _placeholder_elements(owner) -> list:
 def _layout_placeholder(ph, layout):
     """The layout placeholder a slide placeholder inherits from: same idx first, else same type."""
     elements = _placeholder_elements(layout)
-    if ph.get("idx") is not None:
-        idx = int(ph.get("idx"))
-        found = next((el for el in elements if int(el.ph.get("idx", 0)) == idx), None)
+    idx = _int(ph.get("idx"))
+    if idx is not None:
+        found = next((el for el in elements if (_int(el.ph.get("idx")) or 0) == idx), None)
         if found is not None:
             return found
     return next((el for el in elements if _ph_type(el.ph) == _ph_type(ph)), None)
@@ -129,6 +161,15 @@ def _theme_fonts(master) -> tuple[str | None, str | None]:
     return _theme_fonts_from(theme.blob)
 
 
+@dataclass(frozen=True)
+class _Body:
+    insets: dict[str, int]
+    wrap: bool
+    autofit: str
+    font_scale: float
+    line_spacing_reduction: float
+
+
 class _Inheritance:
     """Everything a shape's text inherits from, collected once per shape."""
 
@@ -158,7 +199,7 @@ class _Inheritance:
     def levels(self, paragraph_el) -> list:
         """The `a:lvlNpPr` of every list style for the paragraph's level, in priority order."""
         p_pr = paragraph_el.find(qn("a:pPr"))
-        level = min(max(int(p_pr.get("lvl", 0)) if p_pr is not None else 0, 0), 8)
+        level = min(max((_int(p_pr.get("lvl")) if p_pr is not None else None) or 0, 0), 8)
         tag = qn(f"a:lvl{level + 1}pPr")
         return [el for el in (styles.find(tag) for styles in self.list_styles) if el is not None]
 
@@ -171,13 +212,23 @@ class _Inheritance:
             return self.minor or typeface
         return typeface
 
-    def insets_and_wrap(self) -> tuple[dict[str, int], bool]:
+    def body(self) -> _Body:
         insets = {
-            name: next((int(b.get(name)) for b in self.body_prs if b.get(name) is not None), default)
+            name: next((v for b in self.body_prs if (v := _int(b.get(name))) is not None), default)
             for name, default in _DEFAULT_INSETS.items()
         }
         wrap = next((b.get("wrap") for b in self.body_prs if b.get("wrap")), "square")
-        return insets, wrap != "none"
+        fit = next((child for b in self.body_prs for child in b if child.tag in _AUTOFIT), None)
+        scale = reduction = None
+        if fit is not None and fit.tag == qn("a:normAutofit"):
+            scale, reduction = _percent(fit.get("fontScale")), _percent(fit.get("lnSpcReduction"))
+        return _Body(
+            insets=insets,
+            wrap=wrap != "none",
+            autofit=_AUTOFIT[fit.tag] if fit is not None else "none",
+            font_scale=scale if scale is not None else 1.0,
+            line_spacing_reduction=reduction if reduction is not None else 0.0,
+        )
 
 
 def _bool(value: str | None) -> bool:
@@ -204,10 +255,10 @@ def _resolve(run_el, paragraph_el, inheritance: _Inheritance) -> RunStyle:
 
     latin = (el.find(qn("a:latin")) for el in sources)
     typeface = next((el.get("typeface") for el in latin if el is not None and el.get("typeface")), None)
-    size = first("sz")
+    size = next((v for el in sources if (v := _int(el.get("sz"))) is not None), None)
     return RunStyle(
         family=inheritance.typeface(typeface),
-        size_pt=int(size) / 100 if size is not None else DEFAULT_SIZE_PT,
+        size_pt=size / 100 if size is not None else DEFAULT_SIZE_PT,
         bold=_bool(first("b")),
         italic=_bool(first("i")),
     )
@@ -248,7 +299,10 @@ def _faces(path: Path):
 
 @lru_cache(maxsize=None)
 def _font_index(dirs: tuple[str, ...]) -> tuple[dict[str, list[_Face]], dict[str, list[_Face]]]:
-    """Faces by family name and by full name ("family style"), in deterministic scan order."""
+    """Faces by family name and by full name ("family style"), in deterministic scan order.
+
+    Folders that do not exist are skipped.
+    """
     families: dict[str, list[_Face]] = {}
     full_names: dict[str, list[_Face]] = {}
     seen: set[Path] = set()
@@ -313,16 +367,39 @@ def _fallback_font(size: float) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default(size)
 
 
-def _measuring_font(style: RunStyle, missing: set[str]):
-    size = max(style.size_pt, 1.0) * _SCALE
+@dataclass(frozen=True)
+class _Metrics:
+    """Single-line extent of a font at a size, in pt; `missing` names a family measured by the fallback."""
+
+    ascent: float
+    descent: float
+    missing: str | None = None
+
+
+def _font_for(style: RunStyle) -> tuple[ImageFont.FreeTypeFont, _Metrics]:
+    """The font that measures widths for `style`, with its ascent and descent.
+
+    A family that is not installed, or whose file can no longer be read, is measured with Pillow's
+    default font and a single line of 1.2 × size.
+    """
+    size_pt = max(style.size_pt, 1.0)
     face = _find_face(style.family, style.bold, style.italic)
-    if face is None:
-        missing.add(style.family)
-        return _fallback_font(size)
-    return _load_font(face.path, face.index, size)
+    if face is not None:
+        try:
+            font = _load_font(face.path, face.index, size_pt * _SCALE)
+        except (OSError, ValueError):
+            pass
+        else:
+            ascent, descent = font.getmetrics()
+            return font, _Metrics(ascent / _SCALE, descent / _SCALE)
+    metrics = _Metrics(size_pt, (FALLBACK_LINE_HEIGHT - 1) * size_pt, style.family)
+    return _fallback_font(size_pt * _SCALE), metrics
 
 
 # --- measurement -------------------------------------------------------------------------------
+
+# (kind, width in pt, ascent, descent, family missing for a break) with kind "word" | "space" | "break"
+_Token = tuple[str, float, float, float, str | None]
 
 
 def _first_child(sources: list, tag: str):
@@ -333,85 +410,95 @@ def _first_child(sources: list, tag: str):
     return None
 
 
-def _percent(value: str) -> float:
-    return float(value[:-1]) / 100 if value.endswith("%") else int(value) / 100000
-
-
 def _spacing(element) -> tuple[str, float] | None:
     """("pct", fraction of a line) or ("pts", points) from an `a:lnSpc`/`a:spcBef`/`a:spcAft`."""
     if element is None:
         return None
     pct, pts = element.find(qn("a:spcPct")), element.find(qn("a:spcPts"))
-    if pct is not None and pct.get("val") is not None:
-        return "pct", _percent(pct.get("val"))
-    if pts is not None and pts.get("val") is not None:
-        return "pts", int(pts.get("val")) / 100
+    value = _percent(pct.get("val")) if pct is not None else None
+    if value is not None:
+        return "pct", value
+    value = _int(pts.get("val")) if pts is not None else None
+    if value is not None:
+        return "pts", value / 100
     return None
 
 
-def _spacing_pt(spacing: tuple[str, float] | None, size_pt: float) -> float:
+def _spacing_pt(spacing: tuple[str, float] | None, line_pt: float) -> float:
     if spacing is None:
         return 0.0
     kind, value = spacing
-    return value * size_pt * LINE_HEIGHT if kind == "pct" else value
+    return value * line_pt if kind == "pct" else value
 
 
-def _tokens(paragraph_el, inheritance: _Inheritance, missing: set[str]) -> list[tuple[str, float, float]]:
-    """("word" | "space" | "break", width in pt, size in pt); a word split across runs is one token."""
-    tokens: list[tuple[str, float, float]] = []
+def _tokens(paragraph_el, inheritance: _Inheritance, missing: set[str]) -> list[_Token]:
+    """The paragraph as words, spaces and breaks; a word split across runs is one token."""
+    tokens: list[_Token] = []
     for child in paragraph_el:
         if child.tag not in _RUN_TAGS:
             continue
-        style = _resolve(child, paragraph_el, inheritance)
+        font, metrics = _font_for(_resolve(child, paragraph_el, inheritance))
         if child.tag == qn("a:br"):
-            tokens.append(("break", 0.0, style.size_pt))
+            tokens.append(("break", 0.0, metrics.ascent, metrics.descent, metrics.missing))
             continue
-        font = _measuring_font(style, missing)
-        for i, part in enumerate(_BREAK.split(child.findtext(qn("a:t")) or "")):
+        text = child.findtext(qn("a:t")) or ""
+        if text and metrics.missing:
+            missing.add(metrics.missing)
+        for i, part in enumerate(_BREAK.split(text)):
             if i:
-                tokens.append(("break", 0.0, style.size_pt))
+                tokens.append(("break", 0.0, metrics.ascent, metrics.descent, None))
             for chunk in _TOKEN.findall(part):
                 width = font.getlength(chunk) / _SCALE
                 if chunk.isspace():
-                    tokens.append(("space", width, style.size_pt))
+                    tokens.append(("space", width, metrics.ascent, metrics.descent, None))
                 elif tokens and tokens[-1][0] == "word":
-                    _, previous, size = tokens.pop()
-                    tokens.append(("word", previous + width, max(size, style.size_pt)))
+                    _, previous, ascent, descent, _ = tokens.pop()
+                    tokens.append(("word", previous + width, max(ascent, metrics.ascent), max(descent, metrics.descent), None))
                 else:
-                    tokens.append(("word", width, style.size_pt))
+                    tokens.append(("word", width, metrics.ascent, metrics.descent, None))
     return tokens
 
 
-def _wrap(tokens, available_pt: float | None, empty_size: float) -> tuple[list[float], float]:
-    """Greedy word wrap; returns the largest font size of every line and the widest word in pt.
+def _wrap(tokens: list[_Token], available_pt: float | None, end_metrics, missing: set[str]) -> tuple[list[float], float]:
+    """Greedy word wrap; returns every line's single height (largest ascent + largest descent) and
+    the widest word, in pt.
 
     `available_pt` None means no wrapping. A word wider than the line is broken across lines, as
-    PowerPoint does. A line holding nothing but a break takes the break's size, an empty last line
-    the paragraph end's size.
+    PowerPoint does. A line holding nothing but a break takes the break's metrics, an empty last
+    line those of the paragraph end (`end_metrics()`).
     """
     lines: list[float] = []
-    width = size = widest = 0.0
+    line: tuple[float, float] | None = None  # (ascent, descent) of the current line
+    width = widest = 0.0
     has_word = False
-    for kind, token_width, token_size in tokens:
+    for kind, token_width, ascent, descent, token_missing in tokens:
         if kind == "break":
-            lines.append(size or token_size)
-            width = size = 0.0
-            has_word = False
+            if line is None:
+                line = (ascent, descent)
+                if token_missing:
+                    missing.add(token_missing)
+            lines.append(sum(line))
+            line, width, has_word = None, 0.0, False
             continue
-        if kind == "word":
+        is_word = kind == "word"
+        if is_word:
             widest = max(widest, token_width)
             if available_pt is not None and has_word and width + token_width > available_pt:
-                lines.append(size)
-                width = size = 0.0
-                has_word = False
-            if available_pt and not has_word and width + token_width > available_pt:
-                extra = math.ceil((width + token_width) / available_pt) - 1
-                lines.extend([max(size, token_size)] * extra)
-                width -= extra * available_pt
-            has_word = True
+                lines.append(sum(line))
+                line, width, has_word = None, 0.0, False
+        line = (ascent, descent) if line is None else (max(line[0], ascent), max(line[1], descent))
+        if is_word and available_pt and not has_word and width + token_width > available_pt:
+            extra = math.ceil((width + token_width) / available_pt) - 1
+            lines.extend([sum(line)] * extra)
+            width -= extra * available_pt
+        has_word = has_word or is_word
         width += token_width
-        size = max(size, token_size)
-    lines.append(size or empty_size)
+    if line is None:
+        end = end_metrics()
+        if end.missing:
+            missing.add(end.missing)
+        line = (end.ascent, end.descent)
+    lines.append(sum(line))
     return lines, widest
 
 
@@ -419,36 +506,49 @@ def measure_paragraphs(shape, slide) -> Measurement:
     """Lines per paragraph, text height and widest word of a shape's text, wrapped like PowerPoint.
 
     Words wrap greedily at the shape width minus the left/right insets and the paragraph's left
-    margin; a line is as high as its largest run × 1.2 × the line spacing; paragraph spacing before
-    and after is added. Fonts that are not installed are measured with Pillow's default font and
+    margin. A line is as high as its fonts' ascent + descent (1.2 × size for missing fonts) times
+    the line spacing. Spacing between paragraphs counts; space before the first and after the last
+    paragraph does not. Fonts that are not installed are measured with Pillow's default font and
     listed in `fonts_missing`.
     """
     tx_body = shape._element.find(qn("p:txBody"))
     if tx_body is None:
         return Measurement([], 0.0, 0.0, set())
     inheritance = _Inheritance(shape, slide)
-    insets, wrap = inheritance.insets_and_wrap()
-    text_width = absolute_box(shape).w * EMU_PER_CM - insets["lIns"] - insets["rIns"]
+    body = inheritance.body()
+    text_width = absolute_box(shape).w * EMU_PER_CM - body.insets["lIns"] - body.insets["rIns"]
     missing: set[str] = set()
     lines_per_paragraph: list[int] = []
     height_pt = widest_pt = 0.0
-    for paragraph in tx_body.findall(qn("a:p")):
+    paragraphs = tx_body.findall(qn("a:p"))
+    for number, paragraph in enumerate(paragraphs):
         p_pr = paragraph.find(qn("a:pPr"))
         sources = ([p_pr] if p_pr is not None else []) + inheritance.levels(paragraph)
-        margin = next((int(el.get("marL")) for el in sources if el.get("marL") is not None), 0)
-        available = max(text_width - margin, 0) / EMU_PER_PT if wrap else None
+        margin = next((v for el in sources if (v := _int(el.get("marL"))) is not None), 0)
+        available = max(text_width - margin, 0) / EMU_PER_PT if body.wrap else None
         end = paragraph.find(qn("a:endParaRPr"))
-        empty_size = _resolve(end, paragraph, inheritance).size_pt
-        sizes, widest = _wrap(_tokens(paragraph, inheritance, missing), available, empty_size)
-        line_spacing = _spacing(_first_child(sources, "a:lnSpc")) or ("pct", 1.0)
-        if line_spacing[0] == "pct":
-            height_pt += sum(size * LINE_HEIGHT * line_spacing[1] for size in sizes)
-        else:
-            height_pt += line_spacing[1] * len(sizes)
-        height_pt += _spacing_pt(_spacing(_first_child(sources, "a:spcBef")), sizes[0])
-        height_pt += _spacing_pt(_spacing(_first_child(sources, "a:spcAft")), sizes[-1])
-        lines_per_paragraph.append(len(sizes))
+        lines, widest = _wrap(
+            _tokens(paragraph, inheritance, missing),
+            available,
+            lambda: _font_for(_resolve(end, paragraph, inheritance))[1],
+            missing,
+        )
+        kind, value = _spacing(_first_child(sources, "a:lnSpc")) or ("pct", 1.0)
+        height_pt += sum(line * value for line in lines) if kind == "pct" else value * len(lines)
+        if number > 0:
+            height_pt += _spacing_pt(_spacing(_first_child(sources, "a:spcBef")), lines[0])
+        if number < len(paragraphs) - 1:
+            height_pt += _spacing_pt(_spacing(_first_child(sources, "a:spcAft")), lines[-1])
+        lines_per_paragraph.append(len(lines))
         widest_pt = max(widest_pt, widest)
     to_cm = EMU_PER_PT / EMU_PER_CM
-    height_cm = (insets["tIns"] + insets["bIns"]) / EMU_PER_CM + height_pt * to_cm
-    return Measurement(lines_per_paragraph, round(height_cm, 2), round(widest_pt * to_cm, 2), missing)
+    height_cm = (body.insets["tIns"] + body.insets["bIns"]) / EMU_PER_CM + height_pt * to_cm
+    return Measurement(
+        lines_per_paragraph,
+        round(height_cm, 2),
+        round(widest_pt * to_cm, 2),
+        missing,
+        autofit=body.autofit,
+        font_scale=body.font_scale,
+        line_spacing_reduction=body.line_spacing_reduction,
+    )
