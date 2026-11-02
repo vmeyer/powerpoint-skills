@@ -10,7 +10,7 @@ from pptx_skills.brief import load_brief
 from pptx_skills.cli import main
 from pptx_skills.deckdir import init_deck, load_deck
 from pptx_skills.errors import PptxSkillsError
-from pptx_skills.render import contact_sheet, doctor, find_pdftoppm, find_soffice, render, render_layouts
+from pptx_skills.render import contact_sheet, doctor, render_examples, update_sheets, find_pdftoppm, find_soffice, render, render_layouts
 
 REAL = find_soffice() is not None and find_pdftoppm() is not None
 needs_tools = pytest.mark.skipif(not REAL, reason="LibreOffice/poppler not installed")
@@ -19,10 +19,15 @@ needs_tools = pytest.mark.skipif(not REAL, reason="LibreOffice/poppler not insta
 @pytest.fixture
 def fake_tools(monkeypatch):
     """Record subprocess calls; fake soffice writes <stem>.pdf, fake pdftoppm writes <prefix>-N.png."""
-    calls = []
+    class Calls(list):
+        kwargs: list = []
+
+    calls = Calls()
+    calls.kwargs = []
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        calls.kwargs.append(kwargs)
         if cmd[0].endswith("soffice"):
             outdir = cmd[cmd.index("--outdir") + 1]
             shutil.copyfile(cmd[-1], f"{outdir}/{cmd[-1].rsplit('/', 1)[-1].rsplit('.', 1)[0]}.pdf")
@@ -39,6 +44,7 @@ def fake_tools(monkeypatch):
 def test_render_invokes_tools_with_isolated_profile(fake_tools, deck_with_two_slides, tmp_path):
     out = render(deck_with_two_slides, tmp_path / "out", slides=[2])
     assert any(a.startswith("-env:UserInstallation=file://") for a in fake_tools[0])
+    assert all(k["timeout"] == 180 for k in fake_tools.kwargs)
     i = fake_tools[1].index("-f")
     assert fake_tools[1][i:i + 4] == ["-f", "2", "-l", "2"]
     assert [p.name for p in out] == ["slide-02.png"] and out[0].is_file()
@@ -162,3 +168,81 @@ def test_cli_render_sheet_and_layout_sheet_real(deck_with_two_slides, tmp_path, 
     sheet = render_layouts(deck_with_two_slides, tmp_path / "layouts.png")
     with Image.open(sheet) as image:
         assert image.width > 1000
+
+
+def test_unwritable_out_dir_is_a_pptx_error(fake_tools, deck_with_two_slides, tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    with pytest.raises(PptxSkillsError, match="cannot create output folder"):
+        render(deck_with_two_slides, blocker / "sub")
+
+
+def test_corrupt_png_is_a_pptx_error(tmp_path):
+    bad = tmp_path / "bad.png"
+    bad.write_bytes(b"not a png")
+    with pytest.raises(PptxSkillsError, match="cannot read image"):
+        contact_sheet([bad], ["x"], tmp_path / "s.png")
+
+
+def test_unwritable_sheet_is_a_pptx_error(tmp_path):
+    good = tmp_path / "g.png"
+    Image.new("RGB", (10, 10)).save(good)
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    with pytest.raises(PptxSkillsError, match="cannot write contact sheet"):
+        contact_sheet([good], ["x"], blocker / "s.png")
+
+
+def test_init_survives_sheet_write_failure(monkeypatch, tmp_path, default_pptx, capsys):
+    def boom(deck, out):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(render_mod, "find_soffice", lambda: render_mod.Path("/x/soffice"))
+    monkeypatch.setattr(render_mod, "find_pdftoppm", lambda: render_mod.Path("/x/pdftoppm"))
+    monkeypatch.setattr(render_mod, "render_layouts", boom)
+    assert main(["init", str(tmp_path / "d"), "--from", str(default_pptx)]) == 0
+    assert "contact sheets skipped: disk full" in capsys.readouterr().out
+
+
+def test_slides_option_must_be_numbers(deck_with_two_slides, capsys):
+    assert main(["render", str(deck_with_two_slides), "--slides", "abc"]) == 2
+    assert "--slides expects numbers" in capsys.readouterr().err
+
+
+def test_temp_dirs_removed_after_failed_conversion(monkeypatch, fake_tools, deck_with_two_slides, tmp_path):
+    tmp_root = tmp_path / "tmproot"
+    tmp_root.mkdir()
+    monkeypatch.setattr(render_mod.tempfile, "tempdir", str(tmp_root))
+    monkeypatch.setattr(
+        render_mod.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "nope")
+    )
+    with pytest.raises(PptxSkillsError):
+        render(deck_with_two_slides, tmp_path / "o")
+    assert list(tmp_root.iterdir()) == []
+
+
+def test_render_examples_and_sheet_hash_paths(monkeypatch, fake_tools, deck_with_two_slides, tmp_path, default_pptx):
+    labels = []
+    real_sheet = render_mod.contact_sheet
+
+    def spy(pngs, names, out, **kw):
+        labels.append(names)
+        return real_sheet(pngs, names, out, **kw)
+
+    monkeypatch.setattr(render_mod, "contact_sheet", spy)
+    out = render_examples(deck_with_two_slides, tmp_path / "ex.png")
+    assert out.is_file() and labels[-1] == ["Slide 1", "Slide 2"]
+
+    d = tmp_path / "d"
+    init_deck(d, default_pptx, examples=deck_with_two_slides)
+    assert (d / "style/examples.png").is_file() and (d / "style/layouts.png").is_file()
+    deck = load_deck(d)
+    h = load_brief(d)["sources_hash"]
+    assert h
+    n = len(fake_tools)
+    assert update_sheets(d, deck, h) == (h, []) and len(fake_tools) == n  # unchanged: nothing rendered
+    assert update_sheets(d, deck, h, force=True)[0] == h and len(fake_tools) > n
+    (d / "style/examples.png").unlink()
+    n = len(fake_tools)
+    update_sheets(d, deck, h)
+    assert (d / "style/examples.png").is_file() and len(fake_tools) > n

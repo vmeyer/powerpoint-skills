@@ -1,7 +1,6 @@
 """Render slides to PNG (LibreOffice + poppler), contact sheets of layouts and examples, and `doctor`."""
 
 import hashlib
-import os
 import shutil
 import subprocess
 import tempfile
@@ -53,7 +52,7 @@ def _require_tools() -> tuple[Path, Path]:
 
 def _run(command: list[str], what: str) -> None:
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=_TIMEOUT_S)
+        result = subprocess.run(command, capture_output=True, text=True, errors="replace", timeout=_TIMEOUT_S)
     except subprocess.TimeoutExpired as exc:
         raise PptxSkillsError(f"{what} timed out after {_TIMEOUT_S} s") from exc
     except OSError as exc:
@@ -87,14 +86,17 @@ def render(deck: Path, out_dir: Path | None = None, slides: list[int] | None = N
         tmp = Path(tmp_name)
         profile = tmp / "lo-profile"
         _run(
-            [str(soffice), "--headless", f"-env:UserInstallation=file://{profile}", "--convert-to", "pdf",
+            [str(soffice), "--headless", f"-env:UserInstallation={profile.as_uri()}", "--convert-to", "pdf",
              "--outdir", str(tmp), str(deck)],
             "LibreOffice conversion",
         )
         pdf = tmp / f"{deck.stem}.pdf"
         if not pdf.is_file():
             raise PptxSkillsError(f"LibreOffice produced no PDF for {deck}")
-        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise PptxSkillsError(f"cannot create output folder {out_dir}: {exc}") from exc
         written = []
         for n in numbers:
             prefix = tmp / f"page{n}"
@@ -104,7 +106,10 @@ def render(deck: Path, out_dir: Path | None = None, slides: list[int] | None = N
             if not produced:
                 raise PptxSkillsError(f"pdftoppm produced no image for slide {n}")
             target = out_dir / f"slide-{n:02d}.png"
-            shutil.copyfile(produced[0], target)
+            try:
+                shutil.copyfile(produced[0], target)
+            except OSError as exc:
+                raise PptxSkillsError(f"cannot write {target}: {exc}") from exc
             written.append(target)
     return written
 
@@ -116,10 +121,13 @@ def contact_sheet(pngs: list[Path], labels: list[str], out: Path, columns: int =
     columns = max(1, min(columns, len(pngs)))
     thumbs = []
     for path in pngs:
-        with Image.open(path) as image:
-            image = image.convert("RGB")
-            height = max(1, round(image.height * thumb_width / image.width))
-            thumbs.append(image.resize((thumb_width, height), Image.LANCZOS))
+        try:
+            with Image.open(path) as image:
+                image = image.convert("RGB")
+                height = max(1, round(image.height * thumb_width / image.width))
+                thumbs.append(image.resize((thumb_width, height), Image.LANCZOS))
+        except (OSError, ValueError) as exc:  # UnidentifiedImageError is an OSError
+            raise PptxSkillsError(f"cannot read image {path}: {exc}") from exc
     rows = [thumbs[i:i + columns] for i in range(0, len(thumbs), columns)]
     row_heights = [max(t.height for t in row) + _LABEL_H for row in rows]
     sheet = Image.new("RGB", (columns * thumb_width + (columns + 1) * _GAP, sum(row_heights) + (len(rows) + 1) * _GAP), "white")
@@ -134,8 +142,11 @@ def contact_sheet(pngs: list[Path], labels: list[str], out: Path, columns: int =
             draw.text((x, y + thumb.height + 6), labels[r * columns + c], fill=(30, 30, 30), font=font)
         y += row_heights[r] + _GAP
     out = Path(out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    sheet.save(out)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        sheet.save(out)
+    except (OSError, ValueError) as exc:
+        raise PptxSkillsError(f"cannot write contact sheet {out}: {exc}") from exc
     return out
 
 
@@ -198,7 +209,7 @@ def update_sheets(deck_dir: Path, deck: dict, previous_hash: str | None, force: 
         render_layouts(deck_dir / deck["working_copy"], style / LAYOUTS_SHEET)
         if examples:
             render_examples(Path(examples), style / EXAMPLES_SHEET)
-    except PptxSkillsError as exc:
+    except (PptxSkillsError, OSError) as exc:
         return None, [f"contact sheets skipped: {exc}"]
     return current, []
 
