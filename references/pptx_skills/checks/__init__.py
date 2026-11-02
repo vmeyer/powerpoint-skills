@@ -1,7 +1,7 @@
 """`pptx check`: deterministic rules an agent runs after every change, before it shows a slide.
 
 Rules register with `@rule(rule_id, category, severity)` and take `(ctx, slide)`; the modules
-`structure`, `text` (and later geometry and style) are imported at the bottom of this file.
+`structure`, `text`, `geometry` and `style` are imported at the bottom of this file.
 """
 
 import json
@@ -211,4 +211,4 @@ def register(subparsers) -> None:
     parser.set_defaults(handler=_handle)
 
 
-from . import structure, text  # noqa: E402,F401  (register the rules)
+from . import geometry, structure, style, text  # noqa: E402,F401  (register the rules)
