@@ -265,3 +265,42 @@ def test_neutral_deck_renders_layout_sheet(tmp_path):
     style.write_text("{}")
     init_deck(tmp_path / "n", None, style_file=style)
     assert (tmp_path / "n/style/layouts.png").stat().st_size > 0
+
+
+def hidden_deck(make_deck):
+    """Three blank slides, each a full-slide rectangle in its own color (red, green, blue); slide 2 is hidden."""
+    from pptx.dml.color import RGBColor
+    from pptx.enum.shapes import MSO_SHAPE
+
+    from conftest import layout_named
+
+    def build(prs):
+        for rgb in ("FF0000", "00FF00", "0000FF"):
+            slide = prs.slides.add_slide(layout_named(prs, "Blank"))
+            shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, prs.slide_height)
+            shape.fill.solid()
+            shape.fill.fore_color.rgb = RGBColor.from_string(rgb)
+        prs.slides[1]._element.set("show", "0")
+
+    return make_deck(build, name="hidden.pptx")
+
+
+def test_render_exports_hidden_slides(fake_tools, deck_with_two_slides, tmp_path):
+    render(deck_with_two_slides, tmp_path / "out")
+    i = fake_tools[0].index("--convert-to")
+    assert fake_tools[0][i + 1] == 'pdf:impress_pdf_Export:{"ExportHiddenSlides":{"type":"boolean","value":"true"}}'
+
+
+@needs_tools
+def test_render_real_with_a_hidden_slide(make_deck, tmp_path):
+    deck = hidden_deck(make_deck)
+    out = render(deck, tmp_path / "all", dpi=20)
+    assert [p.name for p in out] == ["slide-01.png", "slide-02.png", "slide-03.png"]
+    colors = []
+    for path in out:
+        with Image.open(path) as image:
+            colors.append(image.convert("RGB").getpixel((image.width // 2, image.height // 2)))
+    assert colors == [(255, 0, 0), (0, 255, 0), (0, 0, 255)]  # page n is slide n, hidden or not
+    last = render(deck, tmp_path / "last", slides=[3], dpi=20)
+    with Image.open(last[0]) as image:
+        assert image.convert("RGB").getpixel((image.width // 2, image.height // 2)) == (0, 0, 255)

@@ -57,7 +57,8 @@ Wherever an op takes a slide (`slide`, `after`):
 | `"id:258"` | the slide with this slide id (stable across moves; see the touched ids in the output) |
 | `"$last"` | the slide created by the latest `add_slide`, `clone_slide` or `replace_slide` in this change set (an error if there is none) |
 
-`pptx inventory <deck.pptx>` lists every slide as `## Slide <number> (id <id>) — <layout>`.
+`pptx inventory <deck.pptx>` lists every slide as `## Slide <number> (id <id>) — <layout>`. A hidden slide is
+marked `(hidden)` (`"hidden": true` with `--json`); it keeps its number and renders like any other.
 
 ## Target refs
 

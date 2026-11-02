@@ -20,6 +20,8 @@ _SOFFICE_PATHS = (
     Path.home() / "Applications/LibreOffice.app/Contents/MacOS/soffice",
 )
 _TIMEOUT_S = 180
+# LibreOffice leaves hidden slides out of a PDF by default, so page n would no longer be slide n
+_PDF_FILTER = 'pdf:impress_pdf_Export:{"ExportHiddenSlides":{"type":"boolean","value":"true"}}'
 _GAP = 16
 _LABEL_H = 34
 _INSTALL_HINT = (
@@ -86,7 +88,7 @@ def render(deck: Path, out_dir: Path | None = None, slides: list[int] | None = N
         tmp = Path(tmp_name)
         profile = tmp / "lo-profile"
         _run(
-            [str(soffice), "--headless", f"-env:UserInstallation={profile.as_uri()}", "--convert-to", "pdf",
+            [str(soffice), "--headless", f"-env:UserInstallation={profile.as_uri()}", "--convert-to", _PDF_FILTER,
              "--outdir", str(tmp), str(deck)],
             "LibreOffice conversion",
         )

@@ -224,3 +224,18 @@ def test_repeated_main_registers_commands_once(deck_with_two_slides):
     for _ in range(2):
         assert main(["inventory", "--help"]) == 0
     assert len(COMMAND_MODULES) == len(set(COMMAND_MODULES))
+
+
+def test_hidden_slides_are_marked(deck_with_two_slides, tmp_path, capsys):
+    from pptx_skills.opc import open_presentation as open_
+
+    prs = open_(deck_with_two_slides)
+    prs.slides[1]._element.set("show", "0")
+    path = tmp_path / "hidden.pptx"
+    prs.save(str(path))
+    inv = inventory(open_(path))
+    assert [s["hidden"] for s in inv["slides"]] == [False, True]
+    assert main(["inventory", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "## Slide 2 (id" in out and "hidden" in out.split("## Slide 2")[1].splitlines()[0]
+    assert "hidden" not in out.split("## Slide 2")[0]

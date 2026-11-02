@@ -15,6 +15,7 @@ from .opc import file_hash, open_presentation, save_presentation
 from .slides import delete_all_slides
 
 _OWNED = ("changes", "snapshots", "render", "check", "style")
+_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 def _deck_json(deck_dir: Path) -> Path:
@@ -91,13 +92,31 @@ def refresh_brief(deck_dir: Path, deck: dict, force: bool = False, notes: list[s
     return brief
 
 
-def _clear(deck_dir: Path, deck: dict | None, working_copy: str | None = None) -> None:
-    name = deck["working_copy"] if deck is not None else working_copy
-    if name:
-        (deck_dir / name).unlink(missing_ok=True)
-    _deck_json(deck_dir).unlink(missing_ok=True)
-    for name in _OWNED:
-        shutil.rmtree(deck_dir / name, ignore_errors=True)
+def _clear(deck_dir: Path, deck: dict) -> None:
+    """Remove what the old deck.json describes: its working copy, the tool's own subfolders and deck.json.
+
+    deck.json goes last, so a failure leaves a deck folder that `init --replace` can clear again.
+    """
+    for path in (deck_dir / deck["working_copy"], *(deck_dir / name for name in _OWNED), _deck_json(deck_dir)):
+        try:
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            elif path.exists() or path.is_symlink():
+                path.unlink()
+        except OSError as exc:
+            raise PptxSkillsError(
+                f"could not remove {path} while replacing the deck: {exc}; remove it by hand and run init with --replace again"
+            ) from exc
+
+
+def _slug(deck_dir: Path) -> str:
+    slug = deck_dir.name
+    if not _SLUG.match(slug):
+        raise PptxSkillsError(
+            f"the deck folder name {str(deck_dir)!r} is not a kebab-case slug; name the folder after the deck, "
+            "for example decks/ai-governance (lowercase letters, digits and hyphens)"
+        )
+    return slug
 
 
 def init_deck(
@@ -124,12 +143,25 @@ def init_deck(
     if source is None and style_file is None:
         raise PptxSkillsError("init needs --from <master.potx|pptx> or --style-file <style.json>")
 
-    slug = deck_dir.name
+    slug = _slug(deck_dir)
     working_copy = f"{slug}.pptx"
-    if mode != "replace":
-        clash = [n for n in (working_copy, *_OWNED) if (deck_dir / n).exists()]
-        if clash:
-            raise PptxSkillsError(f"{deck_dir} already contains {', '.join(clash)}; use --replace to start over")
+    old = None
+    if mode == "replace":
+        if not exists:
+            raise PptxSkillsError(
+                f"{deck_dir} is not a deck folder (no deck.json), so there is no deck to start over from; "
+                "init the deck in a new or empty folder such as decks/<slug>"
+            )
+        old = load_deck(deck_dir)
+        owned = {old["working_copy"], *_OWNED}
+    else:
+        owned = set()
+    clash = [n for n in (working_copy, *_OWNED) if (deck_dir / n).exists() and n not in owned]
+    if clash:
+        raise PptxSkillsError(
+            f"{deck_dir} already contains {', '.join(clash)}, which init would overwrite; "
+            "init the deck in a new or empty folder such as decks/<slug>"
+        )
     # validate every input before touching the folder
     style = load_style_file(style_file) if style_file is not None else None
     prs = open_presentation(source) if source is not None else neutral_presentation(style)
@@ -152,8 +184,8 @@ def init_deck(
         refresh_brief(stage, deck, notes=notes)
         _save_deck(stage, deck)
         deck_dir.mkdir(parents=True, exist_ok=True)
-        if mode == "replace":
-            _clear(deck_dir, None, working_copy)
+        if old is not None:
+            _clear(deck_dir, old)
         for item in stage.iterdir():
             shutil.move(str(item), str(deck_dir / item.name))
     finally:
@@ -243,7 +275,7 @@ def register(subparsers) -> None:
     init.add_argument("--keep-slides", action="store_true", help="keep the slides of the source deck")
     group = init.add_mutually_exclusive_group()
     group.add_argument("--reuse", action="store_true", help="keep the working copy, refresh the brief")
-    group.add_argument("--replace", action="store_true", help="start over inside the deck folder")
+    group.add_argument("--replace", action="store_true", help="start over in an existing deck folder; files the deck does not own stay")
     init.add_argument("--json", action="store_true", help="machine-readable output")
     init.set_defaults(handler=_handle_init)
 

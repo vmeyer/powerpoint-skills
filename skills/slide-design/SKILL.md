@@ -57,7 +57,10 @@ Every deck lives in `decks/<slug>/` in the user's project, the slug in kebab-cas
 
 `init` copies the source to `decks/<slug>/<slug>.pptx`, the **working copy**; the user's own file
 is never written. It writes the style brief to `decks/<slug>/style/` and refuses a folder that
-already holds a deck. Pass `--replace` only when the user asks to start over.
+already holds a deck or files it would overwrite, and a folder name that is not a kebab-case slug.
+Pass `--replace` only when the user asks to start over: it works only in a deck folder (one with
+`deck.json`) and removes just the working copy, `deck.json` and the tool's folders, so
+`storyline.md` and the user's own files stay.
 
 After `init`:
 

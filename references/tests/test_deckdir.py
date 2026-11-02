@@ -1,5 +1,7 @@
 import json
+import os
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -182,11 +184,102 @@ def test_init_refuses_to_overwrite_existing_working_copy(tmp_path, potx_file):
     d = tmp_path / "w"
     d.mkdir()
     (d / "w.pptx").write_text("precious")
-    with pytest.raises(PptxSkillsError, match="--replace"):
+    with pytest.raises(PptxSkillsError, match="new or empty folder") as exc:
         init_deck(d, potx_file)
+    assert "--replace" not in str(exc.value)
+    with pytest.raises(PptxSkillsError, match="not a deck folder") as exc:
+        init_deck(d, potx_file, mode="replace")
+    assert "--replace" not in str(exc.value)
     assert (d / "w.pptx").read_text() == "precious"
+
+
+def _user_folder(tmp_path):
+    """A project folder that is not a deck folder but has folders named like the tool's own."""
+    proj = tmp_path / "proj"
+    (proj / "style").mkdir(parents=True)
+    (proj / "style/site.css").write_text("body {}")
+    (proj / "check").mkdir()
+    (proj / "check/notes.txt").write_text("mine")
+    style = tmp_path / "s.json"
+    style.write_text("{}")
+    return proj, style
+
+
+def test_replace_refuses_a_folder_without_deck_json(tmp_path):
+    proj, style = _user_folder(tmp_path)
+    for mode in ("replace", "new"):
+        with pytest.raises(PptxSkillsError, match="new or empty folder") as exc:
+            init_deck(proj, None, style_file=style, mode=mode)
+        assert "--replace" not in str(exc.value)
+    assert (proj / "style/site.css").read_text() == "body {}" and (proj / "check/notes.txt").read_text() == "mine"
+    assert sorted(p.name for p in proj.iterdir()) == ["check", "style"]
+
+
+def test_cli_replace_on_a_user_folder_keeps_its_files(tmp_path, capsys):
+    proj, style = _user_folder(tmp_path)
+    assert main(["init", str(proj), "--style-file", str(style), "--replace"]) == 2
+    assert "not a deck folder" in capsys.readouterr().err
+    assert (proj / "style/site.css").is_file() and (proj / "check/notes.txt").is_file()
+
+
+@pytest.mark.parametrize("name", [".", "..", "My Deck", "deck_1", "Deck", "-deck", "deck-"])
+def test_init_needs_a_kebab_case_folder_name(tmp_path, monkeypatch, potx_file, name):
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    with pytest.raises(PptxSkillsError, match="kebab-case"):
+        init_deck(Path(name), potx_file)
+    assert list(work.iterdir()) == []
+
+
+def test_cli_init_dot_is_refused(tmp_path, monkeypatch, potx_file, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", ".", "--from", str(potx_file)]) == 2
+    assert "kebab-case" in capsys.readouterr().err
+    assert not (tmp_path / "deck.json").exists() and not (tmp_path / "style").exists()
+
+
+def test_replace_removes_only_what_the_old_deck_describes(tmp_path, potx_file):
+    d = tmp_path / "p"
+    init_deck(d, potx_file)
+    meta = json.loads((d / "deck.json").read_text())
+    (d / "p.pptx").rename(d / "old.pptx")  # an older deck whose working copy had another name
+    meta["working_copy"] = "old.pptx"
+    (d / "deck.json").write_text(json.dumps(meta))
+    (d / "storyline.md").write_text("plan")
+    (d / "render").mkdir()
+    (d / "render/slide-01.png").write_bytes(b"png")
     init_deck(d, potx_file, mode="replace")
-    assert len(open_presentation(d / "w.pptx").slides) == 0
+    assert sorted(p.name for p in d.iterdir()) == ["deck.json", "p.pptx", "storyline.md", "style"]
+    assert (d / "storyline.md").read_text() == "plan"
+
+
+def test_replace_refuses_to_overwrite_a_file_the_old_deck_does_not_own(tmp_path, potx_file):
+    d = tmp_path / "p"
+    init_deck(d, potx_file)
+    meta = json.loads((d / "deck.json").read_text())
+    (d / "p.pptx").rename(d / "old.pptx")
+    meta["working_copy"] = "old.pptx"
+    (d / "deck.json").write_text(json.dumps(meta))
+    (d / "p.pptx").write_text("the user's own file")
+    with pytest.raises(PptxSkillsError, match="p.pptx"):
+        init_deck(d, potx_file, mode="replace")
+    assert (d / "p.pptx").read_text() == "the user's own file" and (d / "old.pptx").is_file()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores folder permissions")
+def test_replace_reports_files_it_cannot_remove(tmp_path, potx_file):
+    d = tmp_path / "p"
+    init_deck(d, potx_file)
+    (d / "render").mkdir()
+    (d / "render/slide-01.png").write_bytes(b"png")
+    (d / "render").chmod(0o500)  # the file inside cannot be deleted
+    try:
+        with pytest.raises(PptxSkillsError, match="could not remove .*render"):
+            init_deck(d, potx_file, mode="replace")
+    finally:
+        (d / "render").chmod(0o700)
+    assert (d / "deck.json").is_file()  # still a deck folder, so --replace can be run again
 
 
 def _with_sections(prs):

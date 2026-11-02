@@ -202,6 +202,7 @@ def inventory(prs, slides: list[int] | None = None) -> dict:
                 "number": number,
                 "id": slide.slide_id,
                 "layout": slide.slide_layout.name,
+                "hidden": slide._element.get("show") in ("0", "false"),
                 "title": _role_text(shapes, "title"),
                 "kicker": _role_text(shapes, "kicker"),
                 "notes": notes,
@@ -234,7 +235,8 @@ def _lines(shapes: list[dict], depth: int) -> list[str]:
 def to_markdown(inv: dict) -> str:
     out = []
     for slide in inv["slides"]:
-        out.append(f"## Slide {slide['number']} (id {slide['id']}) — {slide['layout']}")
+        hidden = " (hidden)" if slide.get("hidden") else ""
+        out.append(f"## Slide {slide['number']} (id {slide['id']}) — {slide['layout']}{hidden}")
         out.extend(_lines(slide["shapes"], 0))
         out.append("")
     return "\n".join(out).rstrip()
