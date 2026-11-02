@@ -27,14 +27,16 @@ Outside a deck folder (no `deck.json` next to the file) `apply` still works but 
 | [`set_text`](#set_text) | write the text of a placeholder or shape |
 | [`add_shape`](#add_shape) | add a rectangle, rounded rectangle, arrow, chevron, ellipse or text box |
 | [`add_table`, `set_table`](#add_table-set_table) | add a native table, or fill and resize a cloned one |
+| [`add_chart`](#add_chart) | add a native, editable chart colored from the theme |
+| [`add_picture`](#add_picture) | add a PNG or JPG cropped to fill a box or a picture placeholder |
+| [`set_notes`](#set_notes) | write the speaker notes of a slide |
 | [`add_line`](#add_line) | add a straight line, with arrowheads if wanted |
 | [`update_shape`](#update_shape) | move, resize, restyle, rename or re-text a shape |
 | [`delete_shape`](#delete_shape-z_order-group-ungroup) | remove a shape |
 | [`z_order`](#delete_shape-z_order-group-ungroup) | bring a shape to the front or send it back |
 | [`group`, `ungroup`](#delete_shape-z_order-group-ungroup) | group shapes or dissolve a group |
 
-Coming in a later version (rejected by `apply` until then): ops for charts, pictures and speaker
-notes. A cloned slide already brings its tables, charts and pictures along.
+A cloned slide already brings its tables, charts and pictures along.
 
 ## Envelope
 
@@ -323,6 +325,56 @@ top-level shapes that are not placeholders can be grouped. Ungroup keeps every c
 {"op": "z_order", "slide": 1, "target": {"name": "badge-1"}, "to": "front"}
 {"op": "group", "slide": 1, "targets": [{"name": "matrix-cell-r1-c1"}, {"name": "badge-1"}], "name": "row-1"}
 {"op": "ungroup", "slide": 1, "target": {"name": "row-1"}}
+```
+
+## Charts, pictures and notes
+
+### add_chart
+
+Adds a native chart (editable in PowerPoint: right-click, Edit Data). `box` is `[x, y, w, h]` in cm, snapped like shapes.
+
+| Field | Meaning |
+|---|---|
+| `type` | `column_clustered`, `column_stacked`, `bar_clustered`, `bar_stacked`, `line` or `doughnut` |
+| `categories` | category labels; every series needs one value per category |
+| `series` | `[{"name", "values"}]`; a doughnut takes exactly one series |
+| `legend` | `bottom`, `right` or `none`; default `bottom` for several series or a doughnut, else `none` |
+| `labels` | `true` shows the value on every bar, point or segment, default `false` |
+
+Series are colored `accent1` to `accent6` in order, as theme colors (a doughnut colors its categories that way);
+more than 6 series or categories is an error. Chart text uses the theme's body font in the text color, at the style
+brief's `min_size_pt` (11 pt by default). Value-axis gridlines are thin (0.5 pt) and light (text color, 85 % lighter).
+There is no 3-D, gradient, shadow or chart title: the slide title states the message.
+
+```json
+{"op": "add_chart", "slide": "$last", "name": "chart-lead-time", "box": [1.69, 4.45, 20.22, 12.57],
+ "type": "column_clustered", "categories": ["Q1", "Q2", "Q3", "Q4"],
+ "series": [{"name": "Lead time (days)", "values": [42, 35, 28, 25]}], "legend": "none", "labels": true}
+```
+
+### add_picture
+
+Adds a PNG or JPG (detected by content; SVG, GIF and the like are rejected, convert them first). `path` is relative
+to the current directory or absolute. `alt` is required: one sentence saying what the picture shows. Give either:
+
+- `box`: the picture fills the box exactly. The image keeps its aspect ratio; the overflowing dimension is
+  cropped evenly on both sides (crop to fill), never stretched.
+- `target`: a picture placeholder of the slide (`{"role": "picture"}` or by name); the picture is inserted
+  there, cropped to fill, and takes over the placeholder's position.
+
+`name` becomes the picture's name.
+
+```json
+{"op": "add_picture", "slide": "$last", "name": "photo-team", "path": "assets/team.jpg", "box": [22.21, 4.45, 9.96, 12.57], "alt": "The team at the planning workshop"}
+```
+
+### set_notes
+
+Replaces the speaker notes of a slide and creates the notes page if there is none. `\n` starts a new paragraph.
+Detail that does not belong on the slide goes here.
+
+```json
+{"op": "set_notes", "slide": "$last", "text": "Lead time fell by 40 % after the release train.\nAsk who owns the remaining wait."}
 ```
 
 ## Tables

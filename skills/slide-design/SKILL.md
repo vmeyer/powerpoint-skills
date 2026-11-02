@@ -169,7 +169,7 @@ screenshot, style from the brief. Never insert the screenshot as a picture.
    parallel facts, chart for numbers, table for lookup ([visual-forms.md](references/visual-forms.md)).
 5. **Little text, structured. Non-negotiable.** A label plus one short line; a bold lead-in
    followed by plain text; no paragraph longer than three lines; no bullet walls. Detail goes into
-   the speaker notes (op `set_notes`, coming; until then give it in your reply).
+   the speaker notes (op `set_notes`).
 6. **Concrete over abstract.** Examples ("e.g. implement and test a requirement"), not buzzwords.
 
 ### Visual

@@ -139,6 +139,62 @@
             }
           },
           {
+            "title": "add_chart",
+            "type": "object",
+            "required": ["op", "slide", "name", "box", "type", "categories", "series"],
+            "additionalProperties": false,
+            "properties": {
+              "op": {"const": "add_chart"},
+              "slide": {"$ref": "#/$defs/slide_ref"},
+              "name": {"type": "string", "minLength": 1},
+              "box": {"$ref": "#/$defs/box"},
+              "type": {"enum": ["column_clustered", "column_stacked", "bar_clustered", "bar_stacked", "line", "doughnut"]},
+              "categories": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+              "series": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["name", "values"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {"type": "string"},
+                    "values": {"type": "array", "items": {"type": "number"}, "minItems": 1}
+                  }
+                }
+              },
+              "legend": {"enum": ["bottom", "right", "none"]},
+              "labels": {"type": "boolean"}
+            }
+          },
+          {
+            "title": "add_picture",
+            "type": "object",
+            "required": ["op", "slide", "name", "path", "alt"],
+            "additionalProperties": false,
+            "oneOf": [{"required": ["box"]}, {"required": ["target"]}],
+            "properties": {
+              "op": {"const": "add_picture"},
+              "slide": {"$ref": "#/$defs/slide_ref"},
+              "name": {"type": "string", "minLength": 1},
+              "path": {"type": "string", "minLength": 1},
+              "box": {"$ref": "#/$defs/box"},
+              "target": {"$ref": "#/$defs/target"},
+              "alt": {"type": "string", "minLength": 1}
+            }
+          },
+          {
+            "title": "set_notes",
+            "type": "object",
+            "required": ["op", "slide", "text"],
+            "additionalProperties": false,
+            "properties": {
+              "op": {"const": "set_notes"},
+              "slide": {"$ref": "#/$defs/slide_ref"},
+              "text": {"type": "string"}
+            }
+          },
+          {
             "title": "add_line",
             "type": "object",
             "required": ["op", "slide", "name", "from", "to", "color", "width_pt"],

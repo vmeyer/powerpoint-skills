@@ -348,8 +348,8 @@ def _replace_slide(ctx: Context, spec: dict) -> None:
     _copied(ctx, slide, kind, carried, spec["from"]["deck"], notes)
 
 
-# Ops modules register themselves on import; the bottom import avoids a cycle. Modules: ops_text, ops_shapes, ops_tables.
-from . import ops_shapes, ops_tables, ops_text  # noqa: E402,F401
+# Ops modules register themselves on import; the bottom import avoids a cycle. Modules: ops_text, ops_shapes, ops_tables, ops_media.
+from . import ops_media, ops_shapes, ops_tables, ops_text  # noqa: E402,F401
 
 
 def _handle_apply(args) -> int:

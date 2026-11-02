@@ -10,7 +10,7 @@ before anyone reads the cells.
 | alternatives: option A vs. B, before vs. after | [Comparison](#comparison) |
 | development over time: milestones, a roadmap | [Timeline](#timeline) |
 | three to six parallel facts of equal weight | [Tiles](#tiles) |
-| numbers: size, trend, share | [Chart](#chart-coming) (coming) |
+| numbers: size, trend, share | [Chart](#chart) |
 | many values the reader looks up | [Table](#table) |
 
 If none fits, the slide may carry two arguments: split it.
@@ -260,10 +260,7 @@ A key-figure tile: a large number, a bold label, one plain line.
 ]}
 ```
 
-## Chart (coming)
-
-> The `add_chart` op comes in a later version; until then `apply` rejects it. Tell the user, or
-> show two or three numbers as key-figure tiles instead.
+## Chart
 
 **Use when** numbers carry the argument: size (bar or column), trend (line), share of a whole
 (doughnut). The title states what the numbers mean, not which numbers they are. One chart per
