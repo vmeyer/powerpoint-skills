@@ -1,9 +1,10 @@
 # Change-set format
 
-Never edit a deck's XML by hand. Write a JSON change set and apply it:
+Never edit a deck's XML by hand. Write a JSON change set (for example `decks/<slug>/change.json`)
+and apply it:
 
-```
-pptx apply decks/<slug>/<slug>.pptx changeset.json
+```bash
+pptx apply decks/<slug>/<slug>.pptx decks/<slug>/change.json
 ```
 
 `pptx apply` validates every op against the schema first, performs all ops on an in-memory copy and saves
@@ -13,6 +14,24 @@ change set to `changes/NNN-<label>.json` and prints the touched slide ids plus n
 deck was changed outside the agent or is open in PowerPoint. Add `--json` for machine-readable output.
 
 Outside a deck folder (no `deck.json` next to the file) `apply` still works but writes no snapshot or log.
+
+## Ops
+
+| Op | Does |
+|---|---|
+| [`add_slide`](#add_slide) | add a slide with a layout of the master |
+| [`delete_slide`](#delete_slide) | remove a slide |
+| [`move_slide`](#move_slide) | move a slide to another position |
+| [`set_text`](#set_text) | write the text of a placeholder or shape |
+| [`add_shape`](#add_shape) | add a rectangle, rounded rectangle, arrow, chevron, ellipse or text box |
+| [`add_line`](#add_line) | add a straight line, with arrowheads if wanted |
+| [`update_shape`](#update_shape) | move, resize, restyle, rename or re-text a shape |
+| [`delete_shape`](#delete_shape-z_order-group-ungroup) | remove a shape |
+| [`z_order`](#delete_shape-z_order-group-ungroup) | bring a shape to the front or send it back |
+| [`group`, `ungroup`](#delete_shape-z_order-group-ungroup) | group shapes or dissolve a group |
+
+Coming in a later version (rejected by `apply` until then): cloning and replacing slides, tables,
+charts, pictures and speaker notes.
 
 ## Envelope
 
@@ -31,37 +50,43 @@ Wherever an op takes a slide (`slide`, `after`):
 |---|---|
 | `3` | 1-based slide number at the time the op runs (earlier ops in the same change set count) |
 | `"id:258"` | the slide with this slide id (stable across moves; see the touched ids in the output) |
-| `"$last"` | the slide created by the latest add/clone op in this change set |
+| `"$last"` | the slide created by the latest `add_slide` in this change set (an error if there is none) |
+
+`pptx inventory <deck.pptx>` lists every slide as `## Slide <number> (id <id>) — <layout>`.
 
 ## Target refs
 
 Ops that act on a shape select it on a given slide with exactly one of:
 
-```json
+```
 {"role": "title"}   {"name": "Kicker"}   {"id": 12}
 ```
 
 Roles come from the inventory (`title`, `subtitle`, `body`, `kicker`, `picture`, `table`, `chart`, `footer`,
-`number`, `date`). Group children are searched too. If a target matches no shape or more than one, the error
-lists the shapes on the slide; then use the `id`.
+`number`, `date`, `other`). The `kicker` is a short body placeholder above the title, where the layout has one.
+Group children are searched too. If a target matches no shape or more than one, the error lists the shapes on
+the slide; then use the `id`.
 
 ## Colors
 
 Colors are theme roles, so decks follow the master when the theme changes:
 `dk1 lt1 dk2 lt2 tx1 tx2 bg1 bg2 accent1`..`accent6 hlink folHlink`, optionally with a brightness shift
 `+NN` (lighter) or `-NN` (darker) in percent, for example `accent1`, `accent1+40`, `tx1-25`.
-A literal `#RRGGBB` is only accepted when the op sets `"allow_rgb": true`.
+`none` means no fill, no line or (for a run) no explicit color. A literal `#RRGGBB` is only accepted by
+`add_shape`, `add_line` and `update_shape` when the op sets `"allow_rgb": true`.
 
 ## Units
 
-All positions and sizes are centimetres from the top-left corner of the slide, as plain numbers.
+All positions and sizes are centimetres from the top-left corner of the slide, as plain numbers. A box is
+`[x, y, w, h]`, a point `[x, y]`.
 
 ## Slide ops
 
 ### add_slide
 
-Adds a slide with the named layout after the slide `after`; at the end when `after` is omitted. An unknown
-layout name lists the available layouts. The new slide becomes `"$last"`.
+Adds a slide with the named layout after the slide `after`; at the end when `after` is omitted. The layout names
+are listed in `style/brief.md`; an unknown name lists the available layouts. The new slide becomes `"$last"`.
+Its placeholders (kicker, title, footer, number) come from the layout; fill them with `set_text`.
 
 ```json
 {"op": "add_slide", "layout": "Title and Content", "after": 2}
@@ -129,36 +154,82 @@ Line break inside a paragraph: a run `{"br": true}` (the inventory form `{"t": "
 {"op": "set_text", "slide": 1, "target": {"role": "title"}, "text": "Quarterly review", "font": {"size": 32, "color": "tx2"}}
 ```
 
-Kicker (the small label above the title), where the master has one:
+Kicker (the small label above the title), where the master has one. Write it in normal case; a master that
+shows kickers in capitals does so by itself.
 
 ```json
-{"op": "set_text", "slide": 1, "target": {"role": "kicker"}, "text": "CLASSIFICATION"}
+{"op": "set_text", "slide": 1, "target": {"role": "kicker"}, "text": "Classification"}
+```
+
+An action title of two sentences: one sentence per line, with a line break inside one paragraph.
+
+```json
+{"op": "set_text", "slide": 1, "target": {"role": "title"}, "paragraphs": [
+  {"runs": [{"t": "Three quick wins come first."}, {"br": true}, {"t": "The platform pays off only after the data work"}]}
+]}
 ```
 
 ## Shapes
 
-Compose slides from native shapes. Colors are theme roles (`accent1+60`, `dk2-25`, `none`); a raw `#RRGGBB` is rejected unless the op sets `"allow_rgb": true`. Boxes are `[x, y, w, h]` in cm and snap to the master's grid (content-area edges and guides, within `rules.snap_cm`) when the deck has a style brief. Every shape gets the `name` you give it; a name already used on the slide is an error.
+Compose slides from native shapes. Colors are theme roles (`accent1+60`, `dk2-25`, `none`); a raw `#RRGGBB` is
+rejected unless the op sets `"allow_rgb": true`. Boxes are `[x, y, w, h]` in cm and snap to the master's grid
+(content-area edges and guides, within `rules.snap_cm`) when the deck has a style brief. Every shape gets the
+`name` you give it; a name already used on the slide is an error.
 
-`shape` is one of `rect`, `roundRect`, `homePlate` (pentagon arrow), `chevron`, `rightArrow`, `leftArrow`, `upArrow`, `downArrow`, `ellipse`, `textbox` (no fill). Optional fields: `fill`, `line` (`"none"` or `{"color", "width_pt", "dash"}`), `pattern`, `text` or `paragraphs` (same shorthand as `set_text`), `font`, `align` (`left|center|right`), `anchor` (`top|middle|bottom`), `insets` `[l,t,r,b]` cm, `radius` (0-0.5, roundRect only).
+### add_shape
 
-Matrix cell with a bold label followed by plain text:
+`shape` is one of `rect`, `roundRect`, `homePlate` (pentagon arrow), `chevron`, `rightArrow`, `leftArrow`,
+`upArrow`, `downArrow`, `ellipse`, `textbox`. Optional fields:
+
+| Field | Value |
+|---|---|
+| `fill` | a color, or `none` |
+| `pattern` | `{"preset", "fg", "bg"}`: OOXML pattern names such as `wdUpDiag`, `ltUpDiag`, `dkDnDiag`, `pct20`; not together with `fill` |
+| `line` | `"none"` or `{"color", "width_pt", "dash"}`; `dash` is one of `solid dash sysDash dot sysDot lgDash dashDot lgDashDot lgDashDotDot` |
+| `text` or `paragraphs` | as in `set_text`, not both |
+| `font` | `{"size", "color", "bold"}` for every run |
+| `align` | `left`, `center` or `right` |
+| `anchor` | `top`, `middle` or `bottom` |
+| `insets` | `[l, t, r, b]` in cm, the space between the shape's edge and its text |
+| `radius` | 0-0.5, corner rounding of a `roundRect` |
+| `allow_rgb` | `true` to accept `#RRGGBB` |
+
+An added shape shows only what the op sets: no fill, no line, no shadow. Its text gets the master's default
+text style (often 18 pt) and, in every shape but `textbox`, is centered horizontally and vertically. So set
+`fill` and `line`, and give every shape with text `font` (size and color), `align`, `anchor` and `insets`.
+
+A `textbox` grows with its text, so `check` cannot report its overflow. For a block of text with a fixed size,
+use a `rect` with `"fill": "none", "line": "none"`.
+
+Matrix cell with a bold label followed by a plain line:
 
 ```json
-{"op": "add_shape", "slide": 1, "name": "cell-r1", "shape": "rect", "box": [1.5, 5, 8, 2],
- "fill": "accent1+60", "line": "none", "text": "**No goal**\nNot worth it", "font": {"size": 12, "color": "dk1"}, "anchor": "middle"}
+{"op": "add_shape", "slide": 1, "name": "matrix-cell-r1-c1", "shape": "rect", "box": [1.69, 4.45, 9.96, 6.14],
+ "fill": "accent1+60", "line": "none", "text": "**No goal**\nNot worth it yet", "font": {"size": 11, "color": "tx1"},
+ "align": "left", "anchor": "top", "insets": [0.3, 0.2, 0.3, 0.2]}
 ```
 
-Hatched area (OOXML pattern preset, foreground and background colors):
+Text block without fill or frame:
+
+```json
+{"op": "add_shape", "slide": 1, "name": "lead-in", "shape": "rect", "box": [1.69, 4.45, 5.3, 2.6],
+ "fill": "none", "line": "none", "text": "**Like a new team member:** the more it takes on, the more guidance it needs",
+ "font": {"size": 11, "color": "tx1"}, "align": "left", "anchor": "top", "insets": [0, 0, 0, 0]}
+```
+
+Hatched area (pattern preset, foreground and background colors):
 
 ```json
 {"op": "add_shape", "slide": 1, "name": "hatch", "shape": "rect", "box": [10, 5, 6, 4],
- "pattern": {"preset": "wdUpDiag", "fg": "accent6", "bg": "lt1"}, "line": "none"}
+ "pattern": {"preset": "wdUpDiag", "fg": "accent6+60", "bg": "lt1"}, "line": "none"}
 ```
 
-Arrow line (`head` is the start, `tail` the end; `none`, `triangle` or `arrow`):
+Axis band with an arrow tip:
 
 ```json
-{"op": "add_line", "slide": 1, "name": "path", "from": [10, 8], "to": [14, 8], "color": "dk1", "width_pt": 3, "tail": "triangle"}
+{"op": "add_shape", "slide": 1, "name": "axis-value", "shape": "homePlate", "box": [7.29, 4.45, 24.88, 0.9],
+ "fill": "accent1", "line": "none", "text": "**Value for customers**", "font": {"size": 12, "color": "lt1"},
+ "align": "left", "anchor": "middle", "insets": [0.3, 0, 0.6, 0]}
 ```
 
 Badge:
@@ -168,22 +239,60 @@ Badge:
  "fill": "accent2", "line": "none", "text": "1", "font": {"size": 12, "color": "lt1", "bold": true}, "align": "center", "anchor": "middle"}
 ```
 
-Change, order, group and remove (a group encloses its children exactly; ungroup keeps every child at its place on the slide):
+### add_line
+
+A straight line from `from` to `to` (points snap like boxes). `color` and `width_pt` are required; `dash` as for
+shapes. `head` is the start, `tail` the end; each `none`, `triangle` or `arrow`.
+
+```json
+{"op": "add_line", "slide": 1, "name": "path", "from": [10, 8], "to": [14, 8], "color": "dk1", "width_pt": 3, "tail": "triangle"}
+```
+
+### update_shape
+
+Takes any `add_shape` field except `shape`, plus `name` to rename. `text` or `paragraphs` replace the text (as in
+`set_text`); `font` alone restyles the existing runs. Lines accept only `name` and `line`; delete and re-add a
+line to move it. Boxes of shapes inside a group cannot be changed; ungroup first.
 
 ```json
 {"op": "update_shape", "slide": 1, "target": {"name": "badge-1"}, "box": [2, 3, 1, 1], "fill": "accent3"}
-{"op": "z_order", "slide": 1, "target": {"name": "badge-1"}, "to": "front"}
-{"op": "group", "slide": 1, "targets": [{"name": "cell-r1"}, {"name": "badge-1"}], "name": "row-1"}
-{"op": "ungroup", "slide": 1, "target": {"name": "row-1"}}
-{"op": "delete_shape", "slide": 1, "target": {"name": "hatch"}}
 ```
 
-`update_shape` takes any `add_shape` field except `shape`, plus `name` to rename. Lines accept only `name` and `line`; delete and re-add a line to move it. Boxes of shapes inside a group cannot be changed; ungroup first.
+### delete_shape, z_order, group, ungroup
+
+`z_order` takes `to`: `front`, `back`, `forward` or `backward`. A group encloses its children exactly; only
+top-level shapes that are not placeholders can be grouped. Ungroup keeps every child at its place on the slide.
+
+```
+{"op": "delete_shape", "slide": 1, "target": {"name": "hatch"}}
+{"op": "z_order", "slide": 1, "target": {"name": "badge-1"}, "to": "front"}
+{"op": "group", "slide": 1, "targets": [{"name": "matrix-cell-r1-c1"}, {"name": "badge-1"}], "name": "row-1"}
+{"op": "ungroup", "slide": 1, "target": {"name": "row-1"}}
+```
 
 ## Grid
 
-Do not compute columns or matrix cells by hand. `pptx grid <deck-dir> --cols 3 --rows 2 --json` returns `{"area": [...], "rows": [[[x, y, w, h], ...], ...]}` inside the content area (`--area full` or `--area x,y,w,h` for others). Each inner list is a ready `box` for `add_shape`:
+Do not compute columns or matrix cells by hand. `pptx grid <deck-dir> --cols C --rows R` returns boxes inside the
+content area from the style brief; `--gutter` sets the column gutter (default 0.3 cm), `--row-gutter` the row
+gutter (default: the column gutter), `--area full` uses the whole slide and `--area x,y,w,h` any other region.
+With `--json` the result is `{"area": [x, y, w, h], "rows": [[[x, y, w, h], …], …]}`, one list per row.
+
+For a deck whose content area is x 1.69, y 4.45, w 30.48, h 12.57:
+
+```bash
+pptx grid decks/<slug> --cols 3 --rows 2
+```
+
+```
+1.69,4.45 9.96x6.14 | 11.95,4.45 9.96x6.14 | 22.21,4.45 9.96x6.14
+1.69,10.88 9.96x6.14 | 11.95,10.88 9.96x6.14 | 22.21,10.88 9.96x6.14
+Boxes are [x, y, w, h] in cm, ready for add_shape.
+```
+
+Each entry is a ready `box`:
 
 ```json
-{"op": "add_shape", "slide": 1, "name": "cell-r1c1", "shape": "rect", "box": [1.5, 4.82, 9.99, 5.79], "fill": "lt2", "line": "none"}
+{"op": "add_shape", "slide": 1, "name": "tile-r1-c1", "shape": "rect", "box": [1.69, 4.45, 9.96, 6.14], "fill": "lt2", "line": "none"}
 ```
+
+Recipes for matrices, processes, comparisons, timelines and tiles are in `visual-forms.md`.
