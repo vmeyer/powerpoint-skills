@@ -38,7 +38,7 @@ def open_presentation(path: Path):
         if suffix == ".potx":
             return Presentation(_potx_as_pptx(path))
         return Presentation(str(path))
-    except (PackageNotFoundError, zipfile.BadZipFile) as exc:
+    except (PackageNotFoundError, zipfile.BadZipFile, KeyError) as exc:  # KeyError: valid zip, not a presentation package
         raise PptxSkillsError(f"{path} cannot be read as a presentation: {exc}") from exc
 
 

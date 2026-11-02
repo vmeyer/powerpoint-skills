@@ -69,3 +69,12 @@ def test_open_rejects_corrupt_potx(tmp_path):
 def test_open_rejects_missing_file(tmp_path):
     with pytest.raises(PptxSkillsError, match="does not exist"):
         open_presentation(tmp_path / "missing.pptx")
+
+
+def test_open_rejects_zip_without_package_parts(tmp_path):
+    import zipfile
+
+    with zipfile.ZipFile(tmp_path / "junk.pptx", "w") as z:
+        z.writestr("a.txt", "hello")
+    with pytest.raises(PptxSkillsError, match="cannot be read"):
+        open_presentation(tmp_path / "junk.pptx")
