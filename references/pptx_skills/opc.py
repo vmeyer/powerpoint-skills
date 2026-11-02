@@ -47,6 +47,12 @@ def file_hash(path: Path) -> str:
 
 
 def save_presentation(prs, path: Path) -> str:
+    """Save and return the file hash; refuses a package in which two parts would share a name."""
+    seen = set()
+    for part in prs.part.package.iter_parts():
+        if part.partname in seen:
+            raise PptxSkillsError(f"two parts of the deck are both named {part.partname}; nothing was written")
+        seen.add(part.partname)
     path = Path(path)
     prs.save(str(path))
     return file_hash(path)

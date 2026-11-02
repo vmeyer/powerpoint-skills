@@ -274,6 +274,71 @@ def deck_with_ole(make_deck):
     return make_deck(build, name="ole.pptx")
 
 
+MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+SLIDE_ZOOM = "http://schemas.microsoft.com/office/powerpoint/2016/slidezoom"
+_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+
+def linked_deck(make_deck, target=2, zoom=False, outline=False, name="linked.pptx"):
+    """Three "Title Only" slides titled "Slide 1" to "Slide 3"; slide 1 links to slide `target`.
+
+    The link is a rectangle named "jump" with a click action. With `zoom`, slide 1 also has a Slide Zoom on
+    the target: an `mc:AlternateContent` whose fallback is a linked picture named "zoom-fallback". With
+    `outline`, the view properties list the target slide in outline view.
+    """
+    from lxml import etree
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    from pptx.oxml.ns import nsdecls, qn
+    from pptx.util import Cm
+
+    def build(prs):
+        slides = [title_slide(prs, f"Slide {n}") for n in (1, 2, 3)]
+        goal = slides[target - 1]
+        jump = slides[0].shapes.add_shape(MSO_SHAPE.RECTANGLE, Cm(1), Cm(5), Cm(3), Cm(2))
+        jump.name = "jump"
+        jump.click_action.target_slide = goal
+        if zoom:
+            pic = slides[0].shapes.add_picture(io.BytesIO(png_bytes()), Cm(6), Cm(5), Cm(4), Cm(3))
+            pic.name = "zoom-fallback"
+            pic.click_action.target_slide = goal
+            rid = pic._element.find(".//" + qn("a:hlinkClick")).get(qn("r:id"))
+            alternate = etree.fromstring(
+                f'<mc:AlternateContent xmlns:mc="{MC}"><mc:Choice xmlns:pslz="{SLIDE_ZOOM}" Requires="pslz">'
+                f'<p:graphicFrame {nsdecls("p", "a", "r")}><p:nvGraphicFramePr><p:cNvPr id="40" name="Slide Zoom"/>'
+                '<p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></p:xfrm>'
+                f'<a:graphic><a:graphicData uri="{SLIDE_ZOOM}"><pslz:sldZm><pslz:sldZmObj sldId="{goal.slide_id}" cId="0" r:id="{rid}"/>'
+                "</pslz:sldZm></a:graphicData></a:graphic></p:graphicFrame></mc:Choice><mc:Fallback/></mc:AlternateContent>"
+            )
+            pic._element.addprevious(alternate)
+            alternate.find(f"{{{MC}}}Fallback").append(pic._element)
+        if outline:
+            view = next(p for p in prs.part.package.iter_parts() if p.partname == "/ppt/viewProps.xml")
+            rid = view.relate_to(goal.part, RT.SLIDE)
+            root = etree.fromstring(view.blob)
+            root.find(qn("p:slideViewPr")).addnext(etree.fromstring(
+                f'<p:outlineViewPr {nsdecls("p", "a", "r")}><p:cViewPr><p:scale><a:sx n="33" d="100"/><a:sy n="33" d="100"/>'
+                f'</p:scale><p:origin x="0" y="0"/></p:cViewPr><p:sldLst><p:sld r:id="{rid}" collapse="1"/></p:sldLst></p:outlineViewPr>'
+            ))
+            view.blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+    return make_deck(build, name=name)
+
+
+def slide_links(prs) -> dict:
+    """{partname of the linking part: [partnames of linked slides]} for every slide relationship but the deck's own."""
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+
+    links = {}
+    for part in prs.part.package.iter_parts():
+        if part is prs.part or part.content_type.endswith("notesSlide+xml"):
+            continue
+        targets = [str(r.target_part.partname) for r in part.rels.values() if r.reltype == RT.SLIDE and not r.is_external]
+        if targets:
+            links[str(part.partname)] = sorted(targets)
+    return links
+
+
 def finding(report, rule, shape=None):
     """The first finding of `rule` (optionally on the shape named `shape`); None when absent."""
     return next((f for f in report["findings"] if f["rule"] == rule and shape in (None, f["shape"])), None)

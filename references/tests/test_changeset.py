@@ -5,13 +5,13 @@ from pptx.enum.shapes import PP_PLACEHOLDER
 from pptx.oxml.ns import qn
 from pptx.util import Cm
 
-from conftest import assert_sections_consistent, layout_named, sectioned_deck, sections
+from conftest import MC, assert_sections_consistent, layout_named, linked_deck, sectioned_deck, sections, slide_links
 from pptx_skills.changeset import apply_changeset
 from pptx_skills.checks import run_checks
 from pptx_skills.cli import main
 from pptx_skills.deckdir import load_deck
 from pptx_skills.errors import PptxSkillsError
-from pptx_skills.opc import file_hash, open_presentation
+from pptx_skills.opc import file_hash, open_presentation, save_presentation
 from pptx_skills import slides
 
 
@@ -252,3 +252,67 @@ def test_delete_then_add_keeps_part_names_unique(deck_with_two_slides):
     apply_changeset(deck_with_two_slides, {"ops": [{"op": "delete_slide", "slide": 1}, {"op": "add_slide", "layout": "Blank"}]})
     assert _unique_part_names(deck_with_two_slides)
     assert [s.slide_layout.name for s in open_presentation(deck_with_two_slides).slides] == ["Title Only", "Blank"]
+
+
+def test_delete_slide_removes_links_to_it(make_deck):
+    deck = linked_deck(make_deck, target=2, zoom=True, outline=True)
+    res = apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 2}]})
+    assert _unique_part_names(deck)
+    prs = open_presentation(deck)
+    first = prs.slides[0]
+    assert [s.shapes.title.text for s in prs.slides] == ["Slide 1", "Slide 3"]
+    assert slide_links(prs) == {}
+    assert first._element.find(".//" + qn("a:hlinkClick")) is None
+    assert next(first._element.iter(f"{{{MC}}}AlternateContent"), None) is None
+    assert "zoom-fallback" in [s.name for s in first.shapes]  # the zoom became its fallback picture
+    import zipfile
+
+    assert b"<p:sld " not in zipfile.ZipFile(deck).read("ppt/viewProps.xml")  # outline entry gone
+    assert any("links to it" in m for m in res["messages"])
+    apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Blank"}]})  # reopened: python-pptx renames slide parts
+    assert _unique_part_names(deck) and len(open_presentation(deck).slides) == 3
+
+
+def test_delete_linked_slide_then_add(make_deck):
+    deck = linked_deck(make_deck, target=3)
+    apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 3}, {"op": "add_slide", "layout": "Blank"}]})
+    assert _unique_part_names(deck)
+    prs = open_presentation(deck)
+    assert [s.slide_layout.name for s in prs.slides] == ["Title Only", "Title Only", "Blank"] and slide_links(prs) == {}
+
+
+def test_save_refuses_two_parts_with_one_name(tmp_path, deck_with_two_slides):
+    prs = open_presentation(deck_with_two_slides)
+    prs.slides[1].part.partname = prs.slides[0].part.partname
+    out = tmp_path / "out.pptx"
+    with pytest.raises(PptxSkillsError, match="both named /ppt/slides/slide1.xml"):
+        save_presentation(prs, out)
+    assert not out.exists()
+
+
+def test_apply_rolls_back_when_part_names_collide(deck_dir_from_default, monkeypatch):
+    deck = deck_dir_from_default / "d.pptx"
+    apply_changeset(deck, {"ops": [{"op": "add_slide", "layout": "Blank"}, {"op": "add_slide", "layout": "Blank"}]})
+    state = _state(deck_dir_from_default)
+    monkeypatch.setattr("pptx_skills.slides._renumber_slide_parts", lambda prs: None)
+    with pytest.raises(PptxSkillsError, match="both named"):
+        apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 1}, {"op": "add_slide", "layout": "Blank"}]})
+    assert _state(deck_dir_from_default) == state
+
+
+def test_delete_refuses_a_link_it_cannot_remove(make_deck):
+    from lxml import etree
+
+    deck = linked_deck(make_deck, target=2)
+    prs = open_presentation(deck)
+    first = prs.slides[0]
+    rid = first.part.relate_to(prs.slides[1].part, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide")
+    jump = next(s for s in first.shapes if s.name == "jump")
+    jump._element.nvSpPr.nvPr.append(etree.fromstring(
+        '<p:custDataLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+        f'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:tags r:id="{rid}"/></p:custDataLst>'))
+    prs.save(deck)
+    before = file_hash(deck)
+    with pytest.raises(PptxSkillsError, match=r"cannot delete slide id \d+: /ppt/slides/slide1.xml refers to it in <tags>"):
+        apply_changeset(deck, {"ops": [{"op": "delete_slide", "slide": 2}]})
+    assert file_hash(deck) == before

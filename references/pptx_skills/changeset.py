@@ -247,7 +247,7 @@ def _delete_slide(ctx: Context, spec: dict) -> None:
     slide = slides.resolve_slide(ctx.prs, spec["slide"], ctx.last_slide)
     slide_id = slide.slide_id  # unavailable once the slide is gone
     last_id = ctx.last_slide.slide_id if ctx.last_slide is not None else None
-    slides.delete_slide(ctx.prs, slide)
+    slides.delete_slide(ctx.prs, slide, ctx.messages)
     ctx.touched.discard(slide_id)
     if last_id == slide_id:
         ctx.last_slide = None

@@ -19,6 +19,9 @@ _MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 # markup-compatibility attributes whose values are lists of namespace prefixes
 _PREFIX_LISTS = ("Requires", f"{{{_MC}}}Ignorable", f"{{{_MC}}}MustUnderstand")
 FOOTER_TYPES = (PP_PLACEHOLDER.DATE, PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.SLIDE_NUMBER)
+_HYPERLINKS = (qn("a:hlinkClick"), qn("a:hlinkHover"), qn("a:hlinkMouseOver"))
+# elements whose only job is to point at a slide: hyperlinks, and `p:sld` in outline views and custom shows
+_SLIDE_POINTERS = (*_HYPERLINKS, qn("p:sld"))
 
 
 def layout_named(prs, name: str):
@@ -172,13 +175,99 @@ def move_slide(prs, slide, to: int) -> None:
     _place(prs, sld_id, to - 1)
 
 
-def delete_slide(prs, slide) -> None:
-    """Remove the slide from the slide list, sections and custom shows, and drop its relationship."""
+def _xml(part):
+    """(root element, store) of a part: python-pptx keeps XML parts parsed, other parts only as bytes."""
+    element = getattr(part, "_element", None)
+    if element is not None:
+        return element, lambda: None
+    root = etree.fromstring(part.blob)
+
+    def store():
+        part.blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+    return root, store
+
+
+def _links_to(prs, part) -> list:
+    """(part, rId) of every relationship to the slide `part` except the presentation's own.
+
+    Only parts reachable without passing through `part` count: its own notes slide links back to it.
+    """
+    found, seen, todo = [], {part, prs.part}, [prs.part]
+    while todo:
+        source = todo.pop()
+        for rid, rel in source.rels.items():
+            if rel.is_external:
+                continue
+            if rel.target_part is part:
+                if source is not prs.part:
+                    found.append((source, rid))
+            elif rel.target_part not in seen:
+                seen.add(rel.target_part)
+                todo.append(rel.target_part)
+    return found
+
+
+def _choice_of(el):
+    return next(el.iterancestors(f"{{{_MC}}}Choice"), None)
+
+
+def _unlink(prs, slide, notes: list[str]) -> None:
+    """Remove every link to `slide` from the rest of the deck and drop the relationships behind them.
+
+    Hyperlinks and outline entries are removed; a zoom (markup inside `mc:Choice`) becomes its fallback,
+    usually a picture, as in applications without zoom support. Raises before any change when a link is
+    of another kind.
+    """
+    links = [(source, rid, *_xml(source)) for source, rid in _links_to(prs, slide.part)]
+    for source, rid, root, _ in links:
+        for el, _, value in _refs(root):
+            if value == rid and el.tag not in _SLIDE_POINTERS and _choice_of(el) is None:
+                name = etree.QName(el).localname
+                raise PptxSkillsError(f"cannot delete slide id {slide.slide_id}: {source.partname} refers to it in <{name}>, which cannot be removed automatically")
+    for source, rid, root, store in links:
+        while refs := [el for el, _, value in _refs(root) if value == rid]:
+            choice = _choice_of(refs[0])
+            if choice is None:
+                refs[0].getparent().remove(refs[0])
+                continue
+            alternate = choice.getparent()
+            fallback = alternate.find(f"{{{_MC}}}Fallback")
+            for child in list(fallback) if fallback is not None else []:
+                alternate.addprevious(child)
+            alternate.getparent().remove(alternate)
+        store()
+        source.rels.pop(rid)
+    ids = {s.part: s.slide_id for s in prs.slides}
+    linking = sorted({ids[source] for source, *_ in links if source in ids})
+    if linking:
+        notes.append(f"deleted slide id {slide.slide_id}: the links to it on slide id(s) {', '.join(map(str, linking))} were removed")
+
+
+def _repoint_links(prs, old, new) -> None:
+    """Point every link to the slide part `old` (hyperlinks, zooms, outline entries) at `new`."""
+    for source, rid in _links_to(prs, old):
+        root, store = _xml(source)
+        new_rid = source.relate_to(new, source.rels[rid].reltype)
+        for el, attr, value in _refs(root):
+            if value == rid:
+                el.set(attr, new_rid)
+        store()
+        source.rels.pop(rid)
+
+
+def delete_slide(prs, slide, notes: list[str] | None = None) -> None:
+    """Remove the slide from the slide list, sections and custom shows, and drop its relationship.
+
+    Links to it from other slides (hyperlinks, zooms) and from the outline view are removed first, so the
+    old slide part does not stay in the file; a note for the user is appended to `notes`.
+    """
     root = prs.part._element
     id_list = prs.slides._sldIdLst
     for sld_id in list(id_list):
         if sld_id.id != slide.slide_id:
             continue
+        _unlink(prs, slide, notes if notes is not None else [])
         for ref in root.iter(f"{{{_P14}}}sldId"):  # sections keep their (possibly empty) entries
             if ref.get("id") == str(sld_id.id):
                 ref.getparent().remove(ref)
@@ -299,12 +388,15 @@ class _SlideCopy:
             self.notes.append(text)
 
     def _check(self, part, root) -> None:
-        for _, _, rid in _refs(root):
+        for el, _, rid in _refs(root):
             rel = part.rels.get(rid)
             if rel is None:
                 raise PptxSkillsError(f"slide {self.number} refers to relationship {rid}, which its deck does not have")
             if not _copyable(rel):
                 self._refuse(_type_name(rel))
+            if rel.reltype == RT.SLIDE and not self.same_deck and el.tag not in _HYPERLINKS:
+                # only a hyperlink can be dropped; a zoom without its slide would be an empty frame
+                self._refuse("a Slide Zoom" if _choice_of(el) is not None else f"a link in <{etree.QName(el).localname}> to another slide")
             if rel.reltype == RT.CHART:
                 self._check_chart(rel.target_part)
 
@@ -313,8 +405,9 @@ class _SlideCopy:
         for el, _, rid in _refs(chart._element):
             rel = chart.rels.get(rid)
             if el is data:
-                if rel is None or rel.is_external:
-                    self._refuse("a chart linked to an external workbook")
+                embedded = rel is not None and not rel.is_external and rel.reltype == RT.PACKAGE
+                if not embedded or rel.target_part.content_type != CT.SML_SHEET:
+                    self._refuse("a chart whose data is not an embedded .xlsx workbook")
             elif rel is None or rel.reltype != RT.IMAGE:
                 self._refuse(f"a chart with {_type_name(rel) if rel is not None else 'a missing part'}")
 
@@ -419,7 +512,10 @@ def clone_slide(src_prs, src_slide, dst_prs, after=None, notes: list[str] | None
 
 
 def replace_slide(dst_prs, target, src_prs, src_slide, notes: list[str] | None = None):
-    """Put a copy of `src_slide` in place of `target`: same position, slide id, sections and custom shows."""
+    """Put a copy of `src_slide` in place of `target`: same position, slide id, sections and custom shows.
+
+    Links to the target from other slides, zooms and the outline view now lead to the copy.
+    """
     slide = _SlideCopy(src_prs, src_slide, dst_prs, notes).make()
     id_list = dst_prs.slides._sldIdLst
     new = id_list[-1]
@@ -430,6 +526,7 @@ def replace_slide(dst_prs, target, src_prs, src_slide, notes: list[str] | None =
             ref.set(qn("r:id"), new.rId)
     old.rId = new.rId
     id_list.remove(new)
+    _repoint_links(dst_prs, target.part, slide.part)
     dst_prs.part.drop_rel(old_rid)
     _renumber_slide_parts(dst_prs)
     refresh_slide_numbers(dst_prs)

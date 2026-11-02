@@ -15,7 +15,10 @@ from pptx.opc.packuri import PackURI
 from pptx.oxml.ns import qn
 from pptx.util import Cm
 
-from conftest import apply, assert_sections_consistent, layout_named, png_bytes, sectioned_deck, sections, title_slide
+from conftest import (
+    SLIDE_ZOOM, apply, assert_sections_consistent, layout_named, linked_deck, png_bytes, sectioned_deck, sections,
+    slide_links, title_slide,
+)
 from pptx_skills import slides
 from pptx_skills.changeset import apply_changeset
 from pptx_skills.checks import run_checks
@@ -447,3 +450,61 @@ def test_replace_then_add_keeps_part_names_unique(deck_with_three_slides, other_
     prs = open_presentation(deck_with_three_slides)
     assert [s.part.partname for s in prs.slides] == [f"/ppt/slides/slide{n}.xml" for n in range(1, 6)]
     assert [s.slide_layout.name for s in prs.slides] == ["Title Only"] * 4 + ["Blank"]
+
+
+
+# --- links into replaced slides, zooms, chart data -------------------------------------------
+
+def _zoom_target(slide):
+    rid = next(slide._element.iter(f"{{{SLIDE_ZOOM}}}sldZmObj")).get(qn("r:id"))
+    return slide.part.related_part(rid)
+
+
+def test_replace_repoints_links_to_the_replaced_slide(make_deck, other_deck):
+    deck = linked_deck(make_deck, target=2, zoom=True, outline=True)
+    old_id = open_presentation(deck).slides[1].slide_id
+    apply(deck, [{"op": "replace_slide", "slide": 2, "from": {"deck": str(other_deck), "slide": 1}}])
+    names = zipfile.ZipFile(deck).namelist()
+    assert len(names) == len(set(names))
+    prs = open_presentation(deck)
+    first, new = prs.slides[0], prs.slides[1]
+    assert new.slide_id == old_id and new.shapes.title.text == "From other deck"
+    jump = next(s for s in first.shapes if s.name == "jump")
+    assert jump.click_action.target_slide.part is new.part
+    assert _zoom_target(first) is new.part
+    assert slide_links(prs) == {"/ppt/slides/slide1.xml": ["/ppt/slides/slide2.xml"], "/ppt/viewProps.xml": ["/ppt/slides/slide2.xml"]}
+
+
+def test_slide_zoom_is_cloned_only_within_the_deck(make_deck, deck_dir_from_default):
+    source = linked_deck(make_deck, target=2, zoom=True)
+    deck = deck_dir_from_default / "d.pptx"
+    with pytest.raises(PptxSkillsError, match="slide 1 uses a Slide Zoom, which cannot be cloned"):
+        apply(deck, [{"op": "clone_slide", "from": {"deck": str(source), "slide": 1}}])
+    apply(source, [{"op": "clone_slide", "from": {"deck": "self", "slide": 1}}])
+    prs = open_presentation(source)
+    assert _zoom_target(prs.slides[3]) is prs.slides[1].part
+
+
+@pytest.mark.parametrize("partname, content_type, reltype", [
+    ("/ppt/embeddings/Book1.xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12", RT.PACKAGE),
+    ("/ppt/embeddings/Book1.xlsb", "application/vnd.ms-excel.sheet.binary.macroEnabled.main", RT.PACKAGE),
+    ("/ppt/embeddings/oleObject1.bin", "application/vnd.openxmlformats-officedocument.oleObject", RT.OLE_OBJECT),
+])
+def test_chart_data_must_be_an_embedded_xlsx(make_deck, deck_dir_from_default, partname, content_type, reltype):
+    from pptx.chart.data import CategoryChartData
+
+    def build(prs):
+        slide = prs.slides.add_slide(layout_named(prs, "Blank"))
+        data = CategoryChartData()
+        data.categories = ["A"]
+        data.add_series("S", (1,))
+        chart = slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Cm(2), Cm(2), Cm(10), Cm(6), data).chart
+        ext = chart.part._element.find(qn("c:externalData"))
+        old = ext.get(qn("r:id"))
+        ext.set(qn("r:id"), chart.part.relate_to(Part(PackURI(partname), content_type, prs.part.package, b"data"), reltype))
+        chart.part.drop_rel(old)
+
+    source = make_deck(build, name="workbook.pptx")
+    deck = deck_dir_from_default / "d.pptx"
+    with pytest.raises(PptxSkillsError, match=r"slide 1 uses a chart whose data is not an embedded \.xlsx workbook, which cannot be cloned"):
+        apply(deck, [{"op": "clone_slide", "from": {"deck": str(source), "slide": 1}}])
