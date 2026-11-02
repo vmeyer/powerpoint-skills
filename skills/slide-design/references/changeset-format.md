@@ -179,3 +179,11 @@ Change, order, group and remove (a group encloses its children exactly; ungroup 
 ```
 
 `update_shape` takes any `add_shape` field except `shape`, plus `name` to rename. Lines accept only `name` and `line`; delete and re-add a line to move it. Boxes of shapes inside a group cannot be changed; ungroup first.
+
+## Grid
+
+Do not compute columns or matrix cells by hand. `pptx grid <deck-dir> --cols 3 --rows 2 --json` returns `{"area": [...], "rows": [[[x, y, w, h], ...], ...]}` inside the content area (`--area full` or `--area x,y,w,h` for others). Each inner list is a ready `box` for `add_shape`:
+
+```json
+{"op": "add_shape", "slide": 1, "name": "cell-r1c1", "shape": "rect", "box": [1.5, 4.82, 9.99, 5.79], "fill": "lt2", "line": "none"}
+```
