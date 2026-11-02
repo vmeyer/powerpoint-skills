@@ -11,6 +11,7 @@ from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 from pptx.oxml.ns import qn
 
 from .colors import read_color
+from .errors import PptxSkillsError
 from .geometry import Box, absolute_box
 from .inventory import inventory
 from .roles import placeholder_role
@@ -318,4 +319,9 @@ def write_brief(brief: dict, style_dir: Path) -> None:
 
 def load_brief(deck_dir: Path) -> dict | None:
     path = Path(deck_dir) / "style" / "brief.json"
-    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:  # JSONDecodeError is a ValueError
+        raise PptxSkillsError(f"{path} is not valid JSON; run `pptx style <deck-dir> --refresh`") from exc
