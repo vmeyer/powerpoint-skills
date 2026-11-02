@@ -58,23 +58,75 @@ def test_overlap_ignores_textless_shapes(make_deck):
     assert finding(run_checks(build(make_deck, fill)), "overlap") is None
 
 
-def near_aligned_for(make_deck, left):
+def near_aligned_for(make_deck, left, top=4.0, second_width=7):
     def fill(slide):
         box(slide, "a", 1.50, 1, 5, 2)
-        box(slide, "b", left, 4, 7, 3)
+        box(slide, "b", left, top, second_width, 3)
 
     return rules(run_checks(build(make_deck, fill)), "near-aligned")
 
 
 def test_near_aligned(make_deck):
-    found = near_aligned_for(make_deck, 1.70)
+    found = near_aligned_for(make_deck, 1.79)
     assert len(found) == 1 and found[0]["severity"] == "warning"
     assert near_aligned_for(make_deck, 1.50) == []
-    assert near_aligned_for(make_deck, 2.00) == []
+    assert near_aligned_for(make_deck, 2.00) == []  # exactly the limit: not flagged
+    assert near_aligned_for(make_deck, 2.20) == []
 
 
 def test_near_aligned_ignores_guide_rounding(make_deck):
     assert near_aligned_for(make_deck, 1.505) == []
+
+
+def test_near_aligned_needs_shared_column_or_row(make_deck):
+    # left edges 0.2 apart but the spans do not overlap horizontally -> different columns
+    assert near_aligned_for(make_deck, 6.7, top=4.0, second_width=2) == []
+    # tops 0.2 apart but the vertical spans do not overlap -> different rows
+    def fill(slide):
+        box(slide, "a", 1, 1.0, 4, 2)
+        box(slide, "b", 8, 1.2, 4, 2)  # same row: tops differ by 0.2
+        box(slide, "c", 8, 9.0, 4, 2)
+        box(slide, "d", 20, 9.2, 3, 2)  # same row as c, not as b
+
+    found = rules(run_checks(build(make_deck, fill)), "near-aligned")
+    assert {f["shape"] for f in found} == {"b", "d"}
+    assert all("top" in f["message"] for f in found)
+
+
+def test_near_aligned_reports_all_edges_in_one_finding(make_deck):
+    found = near_aligned_for(make_deck, 1.70, second_width=5)
+    assert len(found) == 1 and "left" in found[0]["message"] and "right" in found[0]["message"]
+
+
+def test_arrows_and_small_badges_are_not_layout_boxes(make_deck):
+    def fill(slide):
+        box(slide, "a", 1.50, 1, 5, 2)
+        arrow = slide.shapes.add_shape(MSO_SHAPE.UP_ARROW, Cm(1.7), Cm(4), Cm(2), Cm(2))
+        arrow.name = "arrow"
+        badge = box(slide, "badge", 1.7, 7, 3, 0.6, text="Today")
+        badge.name = "badge"
+        box(slide, "over", 1.6, 1.2, 4, 0.6, text="inside")
+
+    report = run_checks(build(make_deck, fill))
+    assert rules(report, "near-aligned") == [] and rules(report, "overlap") == []
+
+
+def test_rotated_text_box_uses_rotated_bounds(make_deck):
+    def fill(slide):
+        axis = box(slide, "axis", -2.46, 8, 9.19, 1.27, text="Axis")
+        axis.rotation = 270  # rotated bounds: 1.27 wide, 9.19 high, around x = 2.1
+        box(slide, "neighbour", 4, 5, 6, 3, text="Next")
+
+    report = run_checks(build(make_deck, fill))
+    assert finding(report, "off-slide") is None and finding(report, "overlap") is None
+
+
+def test_rotated_shape_that_leaves_the_slide(make_deck):
+    def fill(slide):
+        s = box(slide, "tilted", 0, 3, 2, 8, text="Tilt")  # on the slide unrotated
+        s.rotation = 45  # the 45 degree bounds are 7 cm wide around x = 1
+
+    assert finding(run_checks(build(make_deck, fill)), "off-slide")["shape"] == "tilted"
 
 
 def test_uneven_gaps(make_deck):

@@ -1,5 +1,6 @@
 """Axis-aligned boxes in centimetres."""
 
+import math
 from dataclasses import dataclass
 
 from pptx.oxml.ns import qn
@@ -66,6 +67,39 @@ def absolute_box(shape) -> Box:
                 w, h = w * sx, h * sy
         parent = parent.getparent()
     return Box(*(round(v / EMU_PER_CM, 2) for v in (x, y, w, h)))
+
+
+def _rotation_deg(element) -> float:
+    xfrm = _xfrm(element)
+    return int(xfrm.get("rot", 0)) / 60000 if xfrm is not None else 0.0
+
+
+def _rotate(points, centre, degrees):
+    """Rotate points clockwise (slide y points down) about `centre`."""
+    cos, sin = math.cos(math.radians(degrees)), math.sin(math.radians(degrees))
+    cx, cy = centre
+    return [(cx + (x - cx) * cos - (y - cy) * sin, cy + (x - cx) * sin + (y - cy) * cos) for x, y in points]
+
+
+def visual_box(shape) -> Box:
+    """Axis-aligned bounds in cm of what the viewer sees: the frame rotated about its centre,
+    then every enclosing rotated group applied the same way (90°/270° swap width and height)."""
+    from pptx.shapes.group import GroupShape
+
+    box = absolute_box(shape)
+    points = [(box.x, box.y), (box.right, box.y), (box.right, box.bottom), (box.x, box.bottom)]
+    degrees = _rotation_deg(shape._element)
+    if degrees % 360:
+        points = _rotate(points, (box.x + box.w / 2, box.y + box.h / 2), degrees)
+    parent = shape._element.getparent()
+    while parent is not None and parent.tag.endswith("}grpSp"):
+        degrees = _rotation_deg(parent)
+        if degrees % 360:
+            group = absolute_box(GroupShape(parent, None))
+            points = _rotate(points, (group.x + group.w / 2, group.y + group.h / 2), degrees)
+        parent = parent.getparent()
+    xs, ys = [p[0] for p in points], [p[1] for p in points]
+    return Box(*(round(v, 2) for v in (min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))))
 
 
 def _snap_edge(value: float, lines: list[float], tol: float) -> float:

@@ -1,6 +1,6 @@
 """Geometry rules: shapes stay on the slide, inside the content area, apart and aligned."""
 
-from ..geometry import Box
+from ..geometry import Box, visual_box
 from ..units import EMU_PER_CM
 from . import rule
 
@@ -12,7 +12,21 @@ GAP_SPREAD_CM = 0.1
 ROW_SPAN_OVERLAP = 0.5
 _SMALL_ROLES = ("footer", "number", "date")
 _CHROME_ROLES = ("title", "kicker") + _SMALL_ROLES
-_LINES = ("connector",)
+_LINE_PRESETS = ("line", "straightConnector1", "rightArrow", "leftArrow", "upArrow", "downArrow")
+MIN_LAYOUT_SIDE_CM = 0.8
+
+
+def _seen(slide) -> list[dict]:
+    """The inventory tree with every `box` replaced by the rotation-aware bounds (R21)."""
+    shapes = {item["id"]: shape for item, shape in slide.shapes()}
+
+    def convert(items):
+        return [
+            {**item, "box": visual_box(shapes[item["id"]]).as_list() if item["id"] in shapes else item["box"], "children": convert(item["children"])}
+            for item in items
+        ]
+
+    return convert(slide.info["shapes"])
 
 
 def _flat(items):
@@ -30,7 +44,14 @@ def _levels(items):
 
 
 def _plain(item) -> bool:
-    return item["kind"] not in _LINES and item["role"] not in _SMALL_ROLES and item["box"][2] > 0 and item["box"][3] > 0
+    """A layout box (R22): text-bearing or filled, no line, pointer arrow or small marker."""
+    if item["kind"] == "connector" or item["geometry"] in _LINE_PRESETS or item["role"] in _SMALL_ROLES:
+        return False
+    if min(item["box"][2:]) < MIN_LAYOUT_SIDE_CM:
+        return False
+    if item["kind"] in ("group", "picture", "table", "chart", "placeholder"):
+        return True
+    return _has_text(item) or item["fill"] not in (None, "none")
 
 
 def _has_text(item) -> bool:
@@ -43,7 +64,7 @@ def off_slide(ctx, slide):
     width, height = ctx.prs.slide_width / EMU_PER_CM, ctx.prs.slide_height / EMU_PER_CM
     tol = OFF_SLIDE_TOLERANCE_CM
     out = []
-    for item in _flat(slide.info["shapes"]):
+    for item in _flat(_seen(slide)):
         if item["kind"] == "group":
             continue
         x, y, w, h = item["box"]
@@ -58,7 +79,7 @@ def outside_content(ctx, slide):
         return []
     area = Box(*ctx.content_area)
     out = []
-    for item in _flat(slide.info["shapes"]):
+    for item in _flat(_seen(slide)):
         box = Box(*item["box"])
         if item["kind"] == "group" or item["role"] in _CHROME_ROLES or box.contains(area, 0.01):
             continue
@@ -69,7 +90,7 @@ def outside_content(ctx, slide):
 
 @rule("overlap", "geometry", "warning")
 def overlap(ctx, slide):
-    shapes = [i for i in _flat(slide.info["shapes"]) if _plain(i) and i["kind"] != "group" and _has_text(i)]
+    shapes = [i for i in _flat(_seen(slide)) if _plain(i) and i["kind"] != "group" and _has_text(i)]
     out = []
     for n, first in enumerate(shapes):
         a = Box(*first["box"])
@@ -85,20 +106,23 @@ def overlap(ctx, slide):
 def near_aligned(ctx, slide):
     limit = ctx.rules["near_align_cm"]
     out = []
-    for level in _levels(slide.info["shapes"]):
+    for level in _levels(_seen(slide)):
         shapes = [i for i in level if _plain(i)]
         for n, first in enumerate(shapes):
             a = Box(*first["box"])
             for second in shapes[n + 1 :]:
                 b = Box(*second["box"])
-                edges = [
-                    (name, abs(getattr(a, attr) - getattr(b, attr)))
-                    for name, attr in (("left", "x"), ("right", "right"), ("top", "y"), ("bottom", "bottom"))
-                ]
-                near = [(name, d) for name, d in edges if ALIGN_NOISE_CM - 1e-9 <= d <= limit + 1e-9]
+                same_column = min(a.right, b.right) - max(a.x, b.x) > 0
+                same_row = min(a.bottom, b.bottom) - max(a.y, b.y) > 0
+                edges = []
+                if same_column:
+                    edges += [("left", a.x - b.x), ("right", a.right - b.right)]
+                if same_row:
+                    edges += [("top", a.y - b.y), ("bottom", a.bottom - b.bottom)]
+                near = [(name, abs(d)) for name, d in edges if ALIGN_NOISE_CM - 1e-9 <= abs(d) < limit - 1e-9]
                 if near:
-                    name, d = near[0]
-                    out.append(ctx.finding(slide, second, f"the {name} edges of “{first['name']}” and “{second['name']}” differ by {d:.2f} cm", f"align the {name} edge of “{second['name']}” with “{first['name']}” or move it clearly apart"))
+                    detail = ", ".join(f"{name} {d:.2f}" for name, d in near)
+                    out.append(ctx.finding(slide, second, f"“{first['name']}” and “{second['name']}” are almost aligned (edge differences in cm: {detail})", f"align “{second['name']}” with “{first['name']}” on those edges or move it clearly apart"))
     return out
 
 
@@ -122,7 +146,7 @@ def _rows(shapes):
 @rule("uneven-gaps", "geometry", "warning")
 def uneven_gaps(ctx, slide):
     out = []
-    for level in _levels(slide.info["shapes"]):
+    for level in _levels(_seen(slide)):
         for row in _rows([i for i in level if _plain(i)]):
             gaps = [round(b["box"][0] - (a["box"][0] + a["box"][2]), 2) for a, b in zip(row, row[1:])]
             if min(gaps) < 0 or max(gaps) >= GAP_MAX_CM or max(gaps) - min(gaps) <= GAP_SPREAD_CM + 1e-9:
