@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from pptx.oxml.ns import qn
+
 
 @dataclass(frozen=True)
 class Box:
@@ -34,3 +36,33 @@ class Box:
 
     def as_list(self) -> list[float]:
         return [self.x, self.y, self.w, self.h]
+
+
+def _xfrm(element):
+    found = element.xpath("./p:spPr/a:xfrm | ./p:grpSpPr/a:xfrm | ./p:xfrm")
+    return found[0] if found else None
+
+
+def absolute_box(shape) -> Box:
+    """Slide-absolute box of a shape in cm, resolving every enclosing group transform.
+
+    Placeholders without their own ``xfrm`` use the position python-pptx inherits from the layout.
+    """
+    from .units import EMU_PER_CM
+
+    x, y = float(shape.left or 0), float(shape.top or 0)
+    w, h = float(shape.width or 0), float(shape.height or 0)
+    parent = shape._element.getparent()
+    while parent is not None and parent.tag.endswith("}grpSp"):
+        xfrm = _xfrm(parent)
+        if xfrm is not None:
+            off, ext = xfrm.find(qn("a:off")), xfrm.find(qn("a:ext"))
+            ch_off, ch_ext = xfrm.find(qn("a:chOff")), xfrm.find(qn("a:chExt"))
+            if None not in (off, ext, ch_off, ch_ext):
+                sx = int(ext.get("cx")) / int(ch_ext.get("cx")) if int(ch_ext.get("cx")) else 1.0
+                sy = int(ext.get("cy")) / int(ch_ext.get("cy")) if int(ch_ext.get("cy")) else 1.0
+                x = int(off.get("x")) + (x - int(ch_off.get("x"))) * sx
+                y = int(off.get("y")) + (y - int(ch_off.get("y"))) * sy
+                w, h = w * sx, h * sy
+        parent = parent.getparent()
+    return Box(*(round(v / EMU_PER_CM, 2) for v in (x, y, w, h)))

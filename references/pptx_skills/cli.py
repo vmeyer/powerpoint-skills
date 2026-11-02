@@ -1,6 +1,7 @@
 """Entry point of the `pptx` command; subcommands live in COMMAND_MODULES."""
 
 import argparse
+import importlib
 import json
 import sys
 from types import ModuleType
@@ -11,10 +12,21 @@ OK, FINDINGS, ERROR = 0, 1, 2
 
 COMMAND_MODULES: list[ModuleType] = []
 
+# Command modules, imported on first use so that importing cli stays cheap and cycle-free.
+_COMMAND_NAMES = ("inventory",)
+
+
+def _load_commands() -> None:
+    for name in _COMMAND_NAMES:
+        module = importlib.import_module(f"{__package__}.{name}")
+        if module not in COMMAND_MODULES:
+            COMMAND_MODULES.append(module)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pptx", description="Design and check PowerPoint decks.")
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
+    _load_commands()
     for module in COMMAND_MODULES:
         module.register(subparsers)
     return parser

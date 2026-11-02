@@ -40,3 +40,40 @@ def make_deck(tmp_path):
         return path
 
     return factory
+
+
+def layout_named(prs, name):
+    return next(layout for layout in prs.slide_layouts if layout.name == name)
+
+
+@pytest.fixture
+def deck_with_two_slides(make_deck):
+    def build(prs):
+        for text in ("First slide", "Second slide"):
+            slide = prs.slides.add_slide(layout_named(prs, "Title Only"))
+            slide.shapes.title.text = text
+
+    return make_deck(build, name="two.pptx")
+
+
+@pytest.fixture
+def kicker_master(make_deck):
+    """Default template whose "Title Only" layout has a 0.6 cm body placeholder above a lowered title."""
+    from lxml import etree
+    from pptx.oxml.ns import nsdecls
+    from pptx.util import Cm
+
+    def build(prs):
+        layout = layout_named(prs, "Title Only")
+        title = layout.placeholders[0]
+        title.left, title.top, title.width, title.height = Cm(1.27), Cm(1.5), Cm(22.86), Cm(3.17)
+        sp = etree.fromstring(
+            f'<p:sp {nsdecls("p", "a")}><p:nvSpPr><p:cNvPr id="20" name="Kicker"/>'
+            '<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>'
+            '<p:nvPr><p:ph type="body" sz="quarter" idx="13"/></p:nvPr></p:nvSpPr>'
+            f'<p:spPr><a:xfrm><a:off x="{Cm(1.27)}" y="{Cm(0.5)}"/><a:ext cx="{Cm(10)}" cy="{Cm(0.6)}"/></a:xfrm></p:spPr>'
+            '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"/><a:t>Kicker</a:t></a:r></a:p></p:txBody></p:sp>'
+        )
+        layout.shapes._spTree.append(sp)
+
+    return make_deck(build, name="kicker.pptx")
