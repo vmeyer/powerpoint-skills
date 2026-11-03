@@ -113,6 +113,19 @@ def test_record_apply_and_find_deck_dir(tmp_path, potx_file):
     assert find_deck_dir(tmp_path / "other.pptx") is None
 
 
+def test_record_apply_keeps_only_the_last_six_snapshots(tmp_path, potx_file):
+    d = tmp_path / "q"
+    init_deck(d, potx_file)
+    (d / "snapshots").mkdir()
+    (d / "snapshots/before-workshop.pptx").write_bytes(b"mine")
+    for i in range(1, 9):
+        record_apply(d, {"ops": []}, "x", bytes([i]), [], f"h{i}")
+    kept = sorted(p.name for p in (d / "snapshots").iterdir())
+    assert kept == ["003.pptx", "004.pptx", "005.pptx", "006.pptx", "007.pptx", "008.pptx", "before-workshop.pptx"]
+    assert (d / "snapshots/008.pptx").read_bytes() == bytes([8])
+    assert len(list((d / "changes").iterdir())) == 8  # the change log stays complete
+
+
 def test_delete_slide_drops_part(deck_with_two_slides, tmp_path):
     prs = open_presentation(deck_with_two_slides)
     delete_slide(prs, prs.slides[0])

@@ -118,7 +118,8 @@ which would repeat the step.
 - **"More like this"** (screenshots, example slides): take over palette, fonts, forms and density. For a
   deck the user gives, `clone_slide` from its path or add it with `pptx init decks/<slug> --reuse --examples <deck.pptx>`.
 - Change a slide through its shapes; for a variant, `clone_slide` from `"self"`. Do not delete and rebuild
-  a slide the user may have edited. Every step's previous state is in `decks/<slug>/snapshots/NNN.pptx`.
+  a slide the user may have edited. The previous state of each of the last six steps is in
+  `decks/<slug>/snapshots/NNN.pptx`; older snapshots are removed, the change log stays complete.
 - Slides the user edited in their own deck come back with `replace_slide` (same position and id).
 
 ## References

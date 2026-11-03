@@ -16,6 +16,8 @@ from .slides import MIN_SLIDE_ID, delete_all_slides
 
 _OWNED = ("changes", "snapshots", "render", "check", "style")
 _SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_SNAPSHOT = re.compile(r"^\d{3,}\.pptx$")
+KEEP_SNAPSHOTS = 6  # older snapshots are removed; the change log stays complete
 
 
 def _deck_json(deck_dir: Path) -> Path:
@@ -272,7 +274,19 @@ def record_apply(
         if cloned_texts:
             deck["cloned_texts"] = cloned_texts
     _save_deck(deck_dir, deck)
+    _prune_snapshots(deck_dir / "snapshots")
     return number
+
+
+def _prune_snapshots(folder: Path) -> None:
+    """Keep the newest KEEP_SNAPSHOTS snapshots; other files in the folder stay. Best effort, after the apply
+    is recorded, so a file that cannot be removed never undoes it."""
+    snapshots = sorted((p for p in folder.iterdir() if _SNAPSHOT.match(p.name)), key=lambda p: int(p.stem))
+    for old in snapshots[:-KEEP_SNAPSHOTS]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
 
 
 def changed_externally(deck_dir: Path) -> bool:

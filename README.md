@@ -31,7 +31,7 @@ Optional planning before a longer deck: one entry per slide (kicker, action titl
 2. **Build.** Each step is one `pptx build` with either a short JSON change set (texts, shapes, tables, charts, pictures, notes, slide operations) or a python-pptx script for free compositions (`pptx exec` runs it with the same safety). `build` applies the step all or nothing, checks the touched slides and renders them, with a contact sheet when several slides changed.
 3. **Look and show.** The agent views the PNGs, fixes what is really wrong (overflowing text, shapes off the slide, leftover template text, poor contrast) and shows you the result. `--strict` adds the matters of taste: sizes, alignment, gaps, colors, fonts.
 
-Every change set or script is logged and the file before it kept as a snapshot, so each step can be traced and undone. Your own files are never written.
+Every change set or script is logged and the file before it kept as a snapshot, so each step can be traced and the last six can be undone. Your own files are never written.
 
 ## Install and use in Claude Code, Codex CLI and GitHub Copilot CLI
 
@@ -253,7 +253,7 @@ decks/<slug>/
   deck.json                   # style sources, last written hash, settings
   style/                      # style brief (md + json); contact sheets with --sheets
   changes/NNN-<what>.json|.py # every change set, script or theme change, in order
-  snapshots/NNN.pptx          # file state before each change
+  snapshots/NNN.pptx          # file state before each of the last six changes
   render/slide-NN.png         # latest render per slide
   render/sheet.png            # contact sheet of the last build or render --sheet
   check/slide-NN.json         # latest check report per slide
